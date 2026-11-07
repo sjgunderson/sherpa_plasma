@@ -1,15 +1,15 @@
 # sherpa_plasma
 
 `sherpa_plasma` is a user contributed package for advanced plasma
-modeling of X-ray data for use in [Sherpa]{https://github.com/sherpa/sherpa},
+modeling of X-ray data for use in [Sherpa](https://github.com/sherpa/sherpa),
 the recommended X-ray modeling package for the Chandra X-ray Observatory.
 This package provides access for browsing a local installation of APED/AtomDB to
 query line emissivities, capturing plasma models (e.g., `apec` and `nei`
 varients) details, and identifying lines present in a modeled X-ray spectrum.
 
 The methods used in this package are based on the (open source)
-Interactive Spectral Interpretation Software ([ISIS]{https://github.com/houckj/isis};
-[Houck & Denicola 2000]{https://scixplorer.org/abs/2000ASPC..216..591H/abstract}).
+Interactive Spectral Interpretation Software ([ISIS](https://github.com/houckj/isis);
+[Houck & Denicola 2000](https://scixplorer.org/abs/2000ASPC..216..591H/abstract)).
 
 ## Install
 
