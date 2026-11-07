@@ -1,57 +1,66 @@
-name: Sync docs to GitHub Wiki
+name: Publish docs to wiki
 
 on:
   push:
+    branches:
+      - main
     paths:
       - "docs/**/*.md"
-      - ".github/workflows/sync-wiki.yml"
+      - "docs/*.md"
+      - ".github/workflows/wiki-sync.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: publish-docs-to-wiki
+  cancel-in-progress: true
+
 jobs:
-  sync-wiki:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      - name: Clone wiki
+      - name: Publish Markdown files to the wiki
         env:
-          WIKI_TOKEN: ${{ secrets.WIKI_TOKEN }}
+          WIKI_TOKEN: ${{ secrets.GH_PAT }}
+        shell: bash
         run: |
-          if [ -z "$WIKI_TOKEN" ]; then
-            echo "Missing WIKI_TOKEN secret. Add a token that can write to this repository's wiki." >&2
+          set -euo pipefail
+
+          if [[ -z "$WIKI_TOKEN" ]]; then
+            echo "Missing GH_PAT secret. Add a token with write access to this repository's wiki."
             exit 1
           fi
-          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$WIKI_TOKEN" | base64 -w0)"
-          git -c "http.extraheader=$auth_header" clone "https://github.com/${GITHUB_REPOSITORY}.wiki.git" "$RUNNER_TEMP/wiki"
 
-      - name: Copy documentation pages
-        run: |
-          cp docs/*.md "$RUNNER_TEMP/wiki/"
-          {
-            echo "# Documentation"
-            echo
-            for file in docs/*.md; do
-              page="$(basename "$file" .md)"
-              printf -- '- [%s](%s)\n' "$page" "$page"
-            done
-          } > "$RUNNER_TEMP/wiki/Home.md"
+          auth="$(printf 'x-access-token:%s' "$WIKI_TOKEN" | base64 -w0)"
+          wiki_dir="$RUNNER_TEMP/wiki"
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" \
+            clone "https://github.com/${GITHUB_REPOSITORY}.wiki.git" "$wiki_dir"
 
-      - name: Publish wiki updates
-        env:
-          WIKI_TOKEN: ${{ secrets.WIKI_TOKEN }}
-        run: |
-          cd "$RUNNER_TEMP/wiki"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- '*.md'
-          if git diff --cached --quiet; then
+          # Copy Markdown files, preserving subdirectories. GitHub Wiki uses Home.md as its landing page.
+          while IFS= read -r -d '' file; do
+            relative_path="${file#docs/}"
+            if [[ "$relative_path" == "HOME.md" ]]; then
+              relative_path="Home.md"
+            fi
+            mkdir -p "$wiki_dir/$(dirname "$relative_path")"
+            cp "$file" "$wiki_dir/$relative_path"
+          done < <(find docs -type f -name '*.md' -print0)
+
+          cd "$wiki_dir"
+          if [[ -z "$(git status --porcelain)" ]]; then
             echo "Wiki is already up to date."
             exit 0
           fi
-          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$WIKI_TOKEN" | base64 -w0)"
-          git -c "http.extraheader=$auth_header" commit -m "Sync documentation from docs/"
-          git -c "http.extraheader=$auth_header" push origin HEAD
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Publish docs from ${GITHUB_SHA}"
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" push
