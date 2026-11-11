@@ -143,7 +143,7 @@ def test_installed_broadened_dem_passes_apec_identities_to_profile_bridge(
     identities = []
 
     def load(*args):
-        identities.append(args[-1])
+        identities.append(args[-2])
         return object()
 
     def project(profiles, edges, temperatures, weights, redshift, velocity):
@@ -160,3 +160,4 @@ def test_installed_broadened_dem_passes_apec_identities_to_profile_bridge(
     assert len(wrapper._data_identities) == 5
     assert np.count_nonzero(actual) == 3
     assert actual.sum() == pytest.approx(0., abs=1.e-6)
+

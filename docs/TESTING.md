@@ -46,12 +46,25 @@ The reference tests can use either bundled 3.0.9 or 3.1.3 calibration.
 including file matching, derived cascade branching, and DEM integration.
 
 All tests, including the uploaded UV regressions, live under `tests/`.
-`tests/test_uv_coverage.py` checks the coverage budget without Sherpa, including
-both edges, absent transitions, list inputs, no overlap, and fractions just
-below and above `1e-4`. The real-model suite also exercises `Tmax=1`, `beta=.1`,
-`p_Si=1` for all six wDEM variants, while retaining the existing sodium
-out-of-coverage rejection tests. Run the full suite in the CIAO environment
-with the optional bridges built:
+`tests/test_uv_coverage.py` exercises independent sparse transitions across the
+full DEM, interpolation across missing endpoints, endpoint clamping, absolute
+weight preservation, and absent triplets without requiring Sherpa.
+`tests/test_uv_model_coverage.py` checks correction and diagnostics over the
+same full distribution, caching, and broadened redistribution into a missing
+branch with controlled doubles. These are not native XSPEC validation.
+`tests/test_uv_profiles_bridge.py` compiles the production C++ bridge against
+a small controlled Aped interface to check sparse-record handling, both tails,
+endpoint clamping, and donor profiles. This also does not validate XSPEC's
+actual ABI or broadened line physics.
+The real-model tests exercise `Tmax=1`, `beta=.1`, `p_Si=1` for all six wDEM
+variants, formerly rejected sodium configurations, and broad native-grid line
+projections. Rebuild both optional bridges before running in CIAO:
+
+```bash
+SHERPA_PLASMA_BUILD_XSPEC_BRIDGE=1 python -m pip install -e .
+```
+
+Run the full suite in the CIAO environment:
 
 ```bash
 SHERPA_PLASMA_UV_XSPEC_ROOT=/opt/anaconda3/envs/ciao-4.18/spectral/modelData/apec_v3.0.9 \
@@ -83,7 +96,8 @@ python examples/characterize_uv_dem.py --root "$SHERPA_PLASMA_UV_XSPEC_ROOT" \
 The script copies the line file to a temporary directory, removes one
 transition at a time, evaluates each copy in a fresh process, and reports
 captured weights, isolated fluxes, and a candidate weighted-line prediction.
-Selected temperatures must lie in the triplet's complete native coverage.
+Predictions integrate every positive-weight temperature and treat unlisted
+transitions as zero at their native endpoints.
 It is a characterization tool, not a pass/fail validation. In particular,
 removing a line from a cooling-flow database can change the cooling function
 and therefore the temperature weights and flux across many bins; the raw

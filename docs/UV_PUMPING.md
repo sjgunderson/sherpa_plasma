@@ -31,7 +31,7 @@ xspec.set_xsxset("APECROOT", "/absolute/path/to/apec_v3.1.3")
 xspec.set_xsabund("angr")
 
 plasma = xspec.XSvvapec("plasma")
-plasma.kT = 0.43  # keV; choose a temperature inside the applicable coverage
+plasma.kT = 0.43  # keV; the wrapper follows the full native model temperature rule
 pumped = wrap_triplet_pumping(plasma, ["Na"])
 pumped.p_Na = 1.0
 print(pumped.temperature_coverage())
@@ -73,8 +73,7 @@ The supported ions for the bundled reference datasets are C V, N VI, O VII,
 Ne IX, Na X, Mg XI, Al XII, Si XIII, P XIV, S XV, Cl XVI, Ar XVII, K XVIII,
 Ca XIX, Ti XXI, Cr XXIII, Mn XXIV, Fe XXV, and Ni XXVII. Other ions are
 rejected for those datasets. For other installations, availability is
-determined from the selected ion's LV/LA data and complete native triplet
-coverage. Broadened APEC variants and arbitrary plasma models are not supported.
+determined from the selected ion's LV/LA data and transition identities. Broadened APEC variants and arbitrary plasma models are not supported.
 
 ### Experimental wDEM support
 
@@ -94,29 +93,28 @@ the same abundance conventions.
 The wrapper captures the native temperature weights from the same XSPEC
 evaluation, integrates the unpumped triplet fluxes across temperature and
 applies `R_integrated = R0_integrated / (1 + p)` to those integrated fluxes.
-For each actively pumped ion, positive-weight bins inside its complete triplet
-coverage contribute to the correction. Bins outside either coverage edge are
-omitted only when the upper bound on the discarded fraction of **each individual
-line integral** is at most `1e-4`. The bound uses emissivities at the nearest
-coverage edge, after checking that they bound all finite native emissivities
-beyond that edge. Missing transitions remain missing; they are never filled or
-interpolated into the DEM. A native tail that exceeds its edge is rejected
-because this bound cannot be established.
+For every positive-weight DEM bin, the forbidden and two intercombination
+transitions are evaluated independently and their photon emissivities summed
+with the original weights. A transition absent from a native temperature's line
+list contributes zero at that endpoint, just as in XSPEC. Other transitions at
+that temperature still contribute. Interpolation is linear in temperature under
+the supported default XSPEC settings. Values beyond the native APEC grid use
+the nearest endpoint, following the underlying model. The wrapper never cuts
+or renormalizes the DEM to a complete-triplet interval.
 
-This admits the negligible Si tail at `Tmax=1`, `beta=.1` for both `XSwdem`
-and `XSvwdem`; their captured temperature distributions agree at matched
-parameters. A significant uncovered contribution still raises `ValueError`,
-reporting the offending bin count and temperature span, required interval,
-discarded-fraction bound, and tolerance. No positive-weight overlap is an
-explicit error. Zero-weight bins contribute nothing.
+This applies at every temperature, including `Tmax=1`, `beta=.1` for Si or Na
+and DEMs spanning both low- and high-temperature tails. There is no coverage
+error budget. The former `coverage_tolerance` keyword remains accepted for
+compatibility but has no effect.
 
-The optional `coverage_tolerance` keyword on `wrap_triplet_pumping` sets this
-per-line budget (finite and in `[0, 1)`, default `1e-4`). Setting it to zero
-requires the bound on discarded emission to be zero. This bounds the omitted
-line integrals, not the relative error of the final ratio. Use
-`temperature_coverage()` to inspect the native interval and choose fitting
-bounds. The correction and broadened profiles use the same selected bins; the
-native child spectrum retains its full temperature distribution.
+A component producing no triplet photons is unchanged. If the integrated
+forbidden flux is zero, there are no photons to transfer. If the integrated
+intercombination flux is zero, `R0` is infinite and finite dimensionless `p`
+does not define a finite suppression target; the component is unchanged and
+`diagnostics()` reports `ratio_status="no_intercombination_emission"`. A wholly
+absent triplet has `R0=None`, `R=None`, and `ratio_status="no_triplet_emission"`.
+For emitting triplets, the status is `"defined"` and the usual integrated ratio
+law applies. The two intercombination branches need not both be nonzero.
 
 At zero pumping the child spectrum is unchanged. For DEM models, `diagnostics()` reports
 `R0_integrated` and `R_integrated`, the ratios of the temperature-integrated
@@ -137,7 +135,11 @@ lines, including thermal and velocity broadening. It scales each forbidden
 and intercombination profile by its integrated transfer; the profile tails
 outside the requested energy grid are not renormalized. The bridge verifies
 that it uses the same XSPEC library as Sherpa. When photons are transferred,
-both integrated intercombination line fluxes must be positive. Initializing a
+an intercombination branch with zero integrated flux is populated using the
+forbidden donor's temperature distribution at that branch's energy. Existing
+nonzero branches retain their own normalized native profiles. Rebuild the
+optional profile bridge after updating this code: the new `project_transfer`
+entry point is required for full-DEM broadened support. Initializing a
 new ion loads native APEC data, which can be expensive; up to four native
 ion contexts are cached. At the final native temperature-grid endpoint,
 the bridge uses the immediately lower representable temperature to avoid an
@@ -155,7 +157,7 @@ captures temperature weights.
 The wrapper also accepts unbroadened `XSmkcflow` for the available ions, with
 the active AtomDB files, `angr`, `switch=2`, positive
 redshift, and no APEC XSETs other than `APECROOT`. It requires the optional
-XSPEC bridge and the same complete-triplet coverage and concurrency precautions
+XSPEC bridge and the same full-DEM integration and concurrency precautions
 as `XSwdem`. The wrapper detects XSPEC cosmology changes and must be
 reconstructed afterward.
 
@@ -179,14 +181,13 @@ string `Fe`; the latter tracks the fitted Fe abundance (or the common metal
 abundance in `XSapec`). Other values are rejected. For `XSvvapec`, use its
 individual element parameters and leave `APEC_TRACE_ABUND` unset.
 
-For a single-temperature component, an actively pumped ion requires its
-temperature in the complete native-triplet interval. DEM components use the
-bounded-tail rule above. `temperature_coverage()` returns the individual closed intervals in
-keV and their intersection for parameters currently greater than zero;
-`None` means no ions are active and an empty tuple means there is no overlap.
-The model does not change the child's temperature bounds. Set suitable bounds
-for your fit, and do not assume that zero abundance or zero normalization
-validates a temperature outside the interval.
+Single-temperature components use the same full-grid rule. `temperature_coverage()`
+reports the native database intervals, `policy="full_dem"`, and
+`outside_native_grid="nearest_endpoint"`; these describe the underlying table,
+not restrictions on the component's temperatures. The wrapper leaves the child's
+temperature bounds unchanged. DEM diagnostics include all positive-weight
+bins in their temperature range and count, and report the three integrated
+intrinsic photon emissivities in `intrinsic_triplet_fluxes`.
 
 Use one wrapper per plasma component in a sum. If physically justified,
 parameters can be linked with Sherpa parameter expressions. Equal `p` values
@@ -237,10 +238,10 @@ astrophysical uncertainties.
 - Pumped spectra require contiguous, increasing source-energy bins. Nonuniform
   widths are supported. For unbroadened models, energies too close to a bin
   edge are rejected because exact XSPEC edge behavior is not established.
-- Nonzero pumping needs complete triplet data at the relevant temperature,
-  subject to the bounded DEM-tail omission rule above. Uncovered emission
-  exceeding that budget, unsupported settings, and unmatched datasets fail
-  explicitly instead of substituting another ion or database.
+- Nonzero pumping needs matching atomic transition identities and branching
+  data. Native table entries may be absent at any temperature; this contributes
+  zero model emissivity for that transition. Unsupported settings and unmatched
+  datasets still fail explicitly.
 - Treat APEC files as immutable while XSPEC is running. If they change, restart
   the Python/XSPEC process and reconstruct the wrapper. The wrapper detects
   changes after construction, but cannot determine whether XSPEC had already
@@ -249,7 +250,7 @@ astrophysical uncertainties.
   require reconstructing the wrapper.
 - Packaged calibrations apply only to their exact file hashes. Other file
   pairs require the matching installation's filemap and atomic files; data
-  that fail the triplet or temperature-coverage checks are rejected.
+  that fail the atomic-identity or branching checks are rejected.
 - Changing any filemap, LV, or LA file used for an installed calibration
   requires reconstructing the wrapper.
 - Sherpa's binary `save`/`restore` round-trip has been tested in the same

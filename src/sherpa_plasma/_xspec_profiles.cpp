@@ -3,6 +3,8 @@
 #include <XSFunctions/Aped.h>
 #include <XSFunctions/Utilities/FunctionUtility.h>
 #include <XSUtil/Error/Error.h>
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <memory>
@@ -22,9 +24,8 @@ struct LineEntry {
 struct Profiles {
     Aped aped;
     int element;
-    double minimum;
-    double maximum;
     std::vector<LineEntry> entries;
+    std::vector<double> forbidden;
 };
 
 struct RestoreDatabase {
@@ -63,8 +64,10 @@ PyObject* create(PyObject*, PyObject* args) {
     int element, ground;
     double minimum, maximum;
     PyObject* transitions;
-    if (!PyArg_ParseTuple(args, "ssiiOdd:create", &library_path, &root,
-                          &element, &ground, &transitions, &minimum, &maximum)) return nullptr;
+    PyObject* wavelength_obj = nullptr;
+    if (!PyArg_ParseTuple(args, "ssiiOdd|O:create", &library_path, &root,
+                          &element, &ground, &transitions, &minimum, &maximum,
+                          &wavelength_obj)) return nullptr;
     try {
         void* library = dlopen(library_path, RTLD_NOW | RTLD_LOCAL);
         if (!library) throw std::runtime_error("cannot open Sherpa XSPEC library");
@@ -87,32 +90,47 @@ PyObject* create(PyObject*, PyObject* args) {
                 throw std::invalid_argument("invalid triplet transitions");
         auto profiles = std::unique_ptr<Profiles>(new Profiles);
         profiles->element = element;
-        profiles->minimum = minimum;
-        profiles->maximum = maximum;
+        // The interval arguments are retained for API compatibility. The native
+        // database, not a per-ion complete-triplet interval, defines the grid.
         if (profiles->aped.Read(std::string(root) + "_coco.fits",
                                 std::string(root) + "_line.fits") != 0)
             throw std::runtime_error("could not read APEC files in native profile bridge");
-        for (int t = 0; t < profiles->aped.NumberTemperatures(); ++t) {
-            double temperature = profiles->aped.m_Temperatures[t];
-            if (temperature < minimum || temperature > maximum) continue;
+        // Read every native temperature. An absent transition contributes zero,
+        // independently of the other two transitions at that temperature.
+        const int count = profiles->aped.NumberTemperatures();
+        std::vector<std::array<double, 3>> emissivity(count, {{0., 0., 0.}});
+        std::array<double, 3> energies = {{0., 0., 0.}};
+        ApedElementRecord prototype;
+        bool have_prototype = false;
+        for (int t = 0; t < count; ++t) {
             if (profiles->aped.ReadTemperature(t) != 0)
                 throw std::runtime_error("could not read APEC temperature in profile bridge");
             int found[3] = {0, 0, 0};
             auto& elements = profiles->aped.m_TemperatureRecord[t].m_ElementRecord;
             for (auto& el : elements) {
+                bool selected_ion = false;
                 for (auto& ion : el.m_IonRecord) {
-                    for (size_t j = 0; j < ion.m_LineEmissivity.size(); ++j) {
-                        double original = ion.m_LineEmissivity[j];
-                        if (el.m_AtomicNumber == element && ion.m_Ion == element - 1
-                                && ion.m_LowerLevel[j] == ground) {
-                            for (int k = 0; k < 3; ++k)
-                                if (ion.m_UpperLevel[j] == upper[k]) {
-                                    profiles->entries.push_back({static_cast<size_t>(t), j, k, original});
-                                    ++found[k];
-                                }
+                    if (el.m_AtomicNumber == element && ion.m_Ion == element - 1) {
+                        selected_ion = true;
+                        for (size_t j = 0; j < ion.m_LineEmissivity.size(); ++j) {
+                            if (ion.m_LowerLevel[j] != ground) continue;
+                            for (int k = 0; k < 3; ++k) {
+                                if (ion.m_UpperLevel[j] != upper[k]) continue;
+                                if (++found[k] > 1)
+                                    throw std::runtime_error("native APEC triplet is ambiguous");
+                                emissivity[t][k] = ion.m_LineEmissivity[j];
+                                double energy = ion.m_LineEnergy[j];
+                                if (!std::isfinite(emissivity[t][k]) || emissivity[t][k] < 0
+                                        || !std::isfinite(energy) || energy <= 0)
+                                    throw std::runtime_error("invalid native APEC transition");
+                                if (energies[k] && energies[k] != energy)
+                                    throw std::runtime_error("native triplet line energy changes with temperature");
+                                energies[k] = energy;
+                            }
                         }
-                        ion.m_LineEmissivity[j] = 0.;
                     }
+                    // Retain an empty continuum record for XSPEC's CIE lookup.
+                    ion.m_LineEmissivity = 0.;
                     ion.m_ContinuumEnergy.resize(0);
                     ion.m_ContinuumFlux.resize(0);
                     ion.m_ContinuumFluxError.resize(0);
@@ -130,14 +148,63 @@ PyObject* create(PyObject*, PyObject* args) {
                         ion.m_LowerLevel.clear();
                     }
                 }
-                if (found[0] > 1 || found[1] > 1 || found[2] > 1)
-                    throw std::runtime_error("native APEC triplet is ambiguous");
+                if (selected_ion && !have_prototype) {
+                    prototype = el;
+                    have_prototype = true;
+                }
             }
         }
-        bool seen[3] = {false, false, false};
-        for (const auto& entry : profiles->entries) seen[entry.transition] = true;
-        if (!seen[0] || !seen[1] || !seen[2])
-            throw std::runtime_error("triplet lines not found in native APEC data");
+        if (!have_prototype)
+            throw std::runtime_error("selected He-like ion not found in native APEC data");
+        std::vector<double> wavelengths;
+        if (wavelength_obj) wavelengths = numbers(wavelength_obj, "invalid triplet wavelengths");
+        if (!wavelengths.empty() && wavelengths.size() != 3)
+            throw std::invalid_argument("expected three triplet wavelengths");
+        for (int k = 0; k < 3; ++k) {
+            if (!energies[k] && wavelengths.size() == 3
+                    && std::isfinite(wavelengths[k]) && wavelengths[k] > 0)
+                energies[k] = 12.39841974 / wavelengths[k];
+            if (!energies[k])
+                throw std::runtime_error("unlisted transition requires matching atomic wavelength");
+        }
+        std::array<int, 3> order = {{0, 1, 2}};
+        std::sort(order.begin(), order.end(), [&](int a, int b) { return energies[a] < energies[b]; });
+        for (auto& ion : prototype.m_IonRecord) {
+            if (ion.m_Ion != element - 1) continue;
+            ion.m_LineEnergy.resize(3);
+            ion.m_LineEnergyError.resize(3);
+            ion.m_LineEmissivity.resize(3);
+            ion.m_LineEmissivityError.resize(3);
+            ion.m_ElementDriver.resize(3);
+            ion.m_IonDriver.resize(3);
+            ion.m_UpperLevel.resize(3);
+            ion.m_LowerLevel.resize(3);
+            for (size_t j = 0; j < 3; ++j) {
+                int k = order[j];
+                ion.m_LineEnergy[j] = energies[k];
+                ion.m_LineEnergyError[j] = 0.;
+                ion.m_LineEmissivity[j] = 0.;
+                ion.m_LineEmissivityError[j] = 0.;
+                ion.m_ElementDriver[j] = element;
+                ion.m_IonDriver[j] = element - 1;
+                ion.m_UpperLevel[j] = static_cast<int>(upper[k]);
+                ion.m_LowerLevel[j] = ground;
+            }
+        }
+        // Give each native temperature an explicit isolated triplet record.
+        // Zero-emissivity rows allow pumping to populate a previously absent
+        // intercombination line with a profile at the donor's temperature.
+        profiles->forbidden.resize(count);
+        for (int t = 0; t < count; ++t) {
+            auto& elements = profiles->aped.m_TemperatureRecord[t].m_ElementRecord;
+            elements.clear();
+            elements.push_back(prototype);
+            profiles->forbidden[t] = emissivity[t][0];
+            for (size_t j = 0; j < 3; ++j) {
+                int k = order[j];
+                profiles->entries.push_back({static_cast<size_t>(t), j, k, emissivity[t][k]});
+            }
+        }
         PyObject* capsule = PyCapsule_New(profiles.get(), "xspec.profiles", destroy_profiles);
         if (!capsule) return nullptr;
         profiles.release();
@@ -154,7 +221,7 @@ PyObject* create(PyObject*, PyObject* args) {
     }
 }
 
-PyObject* project(PyObject*, PyObject* args) {
+PyObject* project_profiles(PyObject* args, bool transfer) {
     PyObject *capsule, *edge_obj, *temp_obj, *weight_obj;
     double redshift, velocity;
     if (!PyArg_ParseTuple(args, "OOOOdd:project", &capsule, &edge_obj, &temp_obj,
@@ -175,17 +242,18 @@ PyObject* project(PyObject*, PyObject* args) {
                 throw std::invalid_argument("energy edges must be positive and increasing");
         for (size_t j = 0; j < temperatures.size(); ++j)
             if (!std::isfinite(temperatures[j]) ||
-                    temperatures[j] < profiles->minimum ||
-                    temperatures[j] > profiles->maximum ||
+                    temperatures[j] <= 0 ||
                     !std::isfinite(weights[j]) || weights[j] < 0)
                 throw std::invalid_argument("invalid DEM weights or temperatures");
 
         // XSPEC's temperature search reads past the grid at its exact upper endpoint.
         const auto& grid = profiles->aped.m_Temperatures;
         const double upper_edge = grid[grid.size() - 1];
-        for (auto& temperature : temperatures)
+        for (auto& temperature : temperatures) {
+            temperature = std::max(grid[0], std::min(temperature, upper_edge));
             if (temperature == upper_edge)
                 temperature = std::nextafter(temperature, 0.);
+        }
 
         RealArray energy(edges.data(), edges.size());
         RealArray temp(temperatures.data(), temperatures.size());
@@ -203,7 +271,9 @@ PyObject* project(PyObject*, PyObject* args) {
                     if (el.m_AtomicNumber == profiles->element)
                         for (auto& ion : el.m_IonRecord)
                             if (ion.m_Ion == profiles->element - 1)
-                                ion.m_LineEmissivity[entry.line] = entry.transition == k ? entry.emissivity : 0.;
+                                ion.m_LineEmissivity[entry.line] = entry.transition == k
+                                    ? (transfer ? profiles->forbidden[entry.temperature]
+                                                : entry.emissivity) : 0.;
             }
             RealArray flux(0., edges.size() - 1), error(0., edges.size() - 1);
             profiles->aped.SumEqSpectra(energy, elements, abundance, redshift,
@@ -240,6 +310,9 @@ PyObject* project(PyObject*, PyObject* args) {
     }
 }
 
+PyObject* project(PyObject*, PyObject* args) { return project_profiles(args, false); }
+PyObject* project_transfer(PyObject*, PyObject* args) { return project_profiles(args, true); }
+
 PyObject* snapshot_db(PyObject*, PyObject*) {
     PyObject* result = PyDict_New();
     if (!result) return nullptr;
@@ -256,6 +329,7 @@ PyObject* snapshot_db(PyObject*, PyObject*) {
 PyMethodDef methods[] = {
     {"create", create, METH_VARARGS, "Load isolated APEC triplet profiles."},
     {"project", project, METH_VARARGS, "Project the isolated triplet with XSPEC."},
+    {"project_transfer", project_transfer, METH_VARARGS, "Project forbidden-donor profiles at each triplet energy."},
     {"_snapshot_db", snapshot_db, METH_NOARGS, "Read XSPEC diagnostic values."},
     {nullptr, nullptr, 0, nullptr}
 };
@@ -263,3 +337,4 @@ PyModuleDef module = {PyModuleDef_HEAD_INIT, "_xspec_profiles", nullptr, -1, met
 }
 
 PyMODINIT_FUNC PyInit__xspec_profiles() { return PyModule_Create(&module); }
+

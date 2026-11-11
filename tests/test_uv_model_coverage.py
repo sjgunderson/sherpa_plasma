@@ -39,7 +39,6 @@ def make_wrapper(module, *, dem=False, broadened=False, temperature=1., norm=1.e
     wrapper._check_state = lambda: None
     wrapper._validate_dem_trial = lambda trial: None
     wrapper._is_dem, wrapper._is_broadened = dem, broadened
-    wrapper._coverage_tolerance = 1.e-4
     wrapper._child_count = 4
     wrapper.pars = [SimpleNamespace(val=value) for value in (temperature, norm, 0., 0., 1.)]
     wrapper._indices = {"kt": 0, "norm": 1, "redshift": 2, "velocity": 3}
@@ -55,10 +54,12 @@ def make_wrapper(module, *, dem=False, broadened=False, temperature=1., norm=1.e
                               "triplet_p": (3, 4, 5), "redistribution": (.75, .25)}}
     grid = _NativeLineGrid(
         np.array([.2, 1., 2.]),
-        np.array([[1.e-8, 1.e-8, 1.e-8], [4., 2., 1.], [1.e-8, 1.e-8, 1.e-8]]),
+        np.array([[2., 1., 0.], [4., 2., 1.], [1., 0., 0.]]),
         np.tile(12.398419843320026 / np.array([1.1, 1.3, 1.7]), (3, 1)), ())
     wrapper._entries = [(record, grid, 1.)]
-    wrapper._manifest = {"line_file_sha256": "line", "continuum_file_sha256": "continuum"}
+    wrapper._manifest = {"line_file_sha256": "line", "continuum_file_sha256": "continuum",
+                         "version": "controlled"}
+    wrapper._pumping = SimpleNamespace(pars=[SimpleNamespace(val=1.)])
     wrapper._data_identities = ("line", "continuum")
     wrapper._library_path = "controlled-xspec"
     return wrapper
@@ -76,10 +77,13 @@ def test_single_temperature_uses_maskable_arrays(uv_module):
 
 
 @pytest.mark.parametrize("norm", [0., 1.e-14])
-def test_single_temperature_outside_coverage_still_checks_zero_scale(uv_module, norm):
+def test_single_temperature_outside_former_coverage_accepts_zero_scale(uv_module, norm):
     wrapper = make_wrapper(uv_module, temperature=.1, norm=norm)
-    with pytest.raises(ValueError, match="Si temperature is outside.*no overlap"):
-        evaluate(wrapper)
+    actual = evaluate(wrapper)
+    if norm == 0:
+        np.testing.assert_array_equal(actual, [10., 10., 10.])
+    else:
+        np.testing.assert_allclose(actual, [9.5, 10.375, 10.125])
 
 
 @pytest.mark.parametrize("broadened", [False, True])
@@ -93,33 +97,75 @@ def test_dem_integration_and_profiles_share_selection_and_cache(uv_module, monke
 
     def project(profiles, edges, temperatures, weights, redshift, velocity):
         projections.append((temperatures.copy(), weights.copy()))
-        return np.diag([4., 2., 1.]) * 1.e14
+        return np.diag([7., 3., 1.]) * 1.e14
 
     monkeypatch.setattr(uv_module, "_capture_cie_evaluation", capture)
     monkeypatch.setattr(uv_module, "_load_broad_profiles", lambda *args: "profiles")
     monkeypatch.setattr(uv_module, "_root", lambda: Path("unused"))
     monkeypatch.setattr(sherpa_plasma, "_xspec_profiles", SimpleNamespace(project=project), raising=False)
-    np.testing.assert_allclose(evaluate(wrapper), [8.8, 10.9, 10.3])
+    transfer = 28. / 15.
+    np.testing.assert_allclose(evaluate(wrapper),
+                               10. + transfer * np.array([-1., .75, .25]))
     assert len(captures) == 1
     if broadened:
         assert len(projections) == 1
-        np.testing.assert_array_equal(projections[0][0], [1.])
-        np.testing.assert_array_equal(projections[0][1], [1.])
+        np.testing.assert_array_equal(projections[0][0], [.1, 1., 3.])
+        np.testing.assert_array_equal(projections[0][1], [1., 1., 1.])
     assert np.isfinite(evaluate(wrapper, pumping=2.)).all()
     assert len(captures) == 1
     assert len(projections) == int(broadened)
 
 
-def test_dem_correction_and_diagnostics_use_same_tolerance(uv_module, monkeypatch):
+def test_dem_diagnostics_use_the_full_distribution(uv_module, monkeypatch):
     wrapper = make_wrapper(uv_module, dem=True)
-    wrapper._coverage_tolerance = 0.
     monkeypatch.setattr(uv_module, "_capture_cie_evaluation", lambda *args: (
-        np.ones(3), np.array([.1, 1.]), np.ones(2)))
-    with pytest.raises(ValueError, match="exceeds tolerance 0"):
-        evaluate(wrapper)
-    wrapper._pumping = SimpleNamespace(pars=[SimpleNamespace(val=1.)])
-    with pytest.raises(ValueError, match="exceeds tolerance 0"):
-        wrapper._dem_diagnostics()
+        np.ones(3), np.array([.1, 1., 3.]), np.ones(3)))
+    diagnostic, = wrapper._dem_diagnostics()
+    assert diagnostic["temperature_count"] == 3
+    assert diagnostic["temperature_range_keV"] == (.1, 3.)
+    assert diagnostic["intrinsic_triplet_fluxes"] == (7., 3., 1.)
+    assert diagnostic["R0_integrated"] == 7. / 4.
+    assert diagnostic["R_integrated"] == 7. / 8.
+
+
+@pytest.mark.parametrize("fluxes,status,ratio", [
+    ([0., 0., 0.], "no_triplet_emission", None),
+    ([1., 0., 0.], "no_intercombination_emission", float("inf")),
+    ([0., 1., 0.], "defined", 0.),
+])
+def test_degenerate_triplets_are_noops_with_explicit_diagnostics(
+        uv_module, monkeypatch, fluxes, status, ratio):
+    wrapper = make_wrapper(uv_module, dem=True, broadened=True)
+    wrapper._entries[0][1].emissivities[:] = fluxes
+    monkeypatch.setattr(uv_module, "_capture_cie_evaluation", lambda *args: (
+        np.full(3, 10.), np.array([.1, 1., 3.]), np.ones(3)))
+    np.testing.assert_array_equal(evaluate(wrapper), [10., 10., 10.])
+    diagnostic, = wrapper._dem_diagnostics()
+    assert diagnostic["ratio_status"] == status
+    assert diagnostic["R_integrated"] == ratio
+
+
+def test_broadened_transfer_can_populate_an_absent_branch(uv_module, monkeypatch):
+    wrapper = make_wrapper(uv_module, dem=True, broadened=True)
+    wrapper._entries[0][1].emissivities[:, 2] = 0.
+    monkeypatch.setattr(uv_module, "_capture_cie_evaluation", lambda *args: (
+        np.full(3, 10.), np.array([.1, 1., 3.]), np.ones(3)))
+    monkeypatch.setattr(uv_module, "_load_broad_profiles", lambda *args: "profiles")
+    monkeypatch.setattr(uv_module, "_root", lambda: Path("unused"))
+    donors = []
+    def donor(*args):
+        donors.append(args)
+        return np.diag([7., 7., 7.]) * 1.e14
+    monkeypatch.setattr(sherpa_plasma, "_xspec_profiles", SimpleNamespace(
+        project=lambda *args: np.diag([7., 3., 0.]) * 1.e14,
+        project_transfer=donor), raising=False)
+    transfer = 21. / 13.
+    actual = evaluate(wrapper)
+    np.testing.assert_allclose(actual, 10. + transfer * np.array([-1., .75, .25]))
+    assert actual.sum() == pytest.approx(30.)
+    np.testing.assert_array_equal(donors[0][2], [.1, 1., 3.])
+    evaluate(wrapper, pumping=2.)
+    assert len(donors) == 1
 
 
 @pytest.mark.parametrize("tolerance", [-1., 1., float("inf"), float("nan")])

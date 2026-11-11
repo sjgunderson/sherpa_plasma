@@ -16,6 +16,87 @@ class _NativeLineGrid:
     lines: tuple
 
 
+def _prepare_triplet_grid(grid, fallback_wavelengths=()):
+    """Give absent model transitions zero emissivity on the full native grid.
+
+    NaN from the raw reader means that the line is absent from that temperature's
+    line list. XSPEC sums the listed transitions at each interpolation endpoint;
+    an absent transition therefore contributes zero, independently of its peers.
+    Wavelengths are transition identities, not temperature-dependent weights.
+    """
+    emissivities = np.array(grid.emissivities, dtype=float, copy=True)
+    missing = np.isnan(emissivities)
+    if (emissivities.shape != (len(grid.temperatures), 3)
+            or np.any(np.isinf(emissivities)) or np.any(emissivities[~missing] < 0)):
+        raise ValueError("invalid native triplet emissivities")
+    fallback = tuple(fallback_wavelengths)
+    wavelengths = np.empty(3)
+    for column in range(3):
+        listed = ~missing[:, column]
+        values = grid.wavelengths[listed, column]
+        if len(values):
+            if (not np.isfinite(values).all() or np.any(values <= 0)
+                    or not np.all(values == values[0])):
+                raise ValueError("selected line wavelengths change across native temperatures")
+            wavelengths[column] = values[0]
+        elif len(fallback) == 3 and np.isfinite(fallback[column]) and fallback[column] > 0:
+            wavelengths[column] = fallback[column]
+        else:
+            raise ValueError("absent transition requires a wavelength from matching atomic data")
+    emissivities[missing] = 0.
+    wavelengths = np.tile(wavelengths, (len(grid.temperatures), 1))
+    for array in (emissivities, wavelengths):
+        array.setflags(write=False)
+    return _NativeLineGrid(grid.temperatures, emissivities, wavelengths, grid.lines)
+
+
+def _integrate_triplet(grid, temperatures, weights):
+    """Integrate all DEM bins using XSPEC's linear, endpoint-clamped table rule."""
+    from ._uv_coverage import _validated_dem_weights
+
+    temperatures, weights = _validated_dem_weights(temperatures, weights)
+    active = weights > 0
+    values = np.column_stack([
+        np.interp(temperatures[active], grid.temperatures, grid.emissivities[:, column])
+        for column in range(3)
+    ])
+    integral = weights[active] @ values
+    if not np.isfinite(integral).all() or np.any(integral < 0):
+        raise ValueError("invalid temperature-integrated triplet flux")
+    return integral, grid.wavelengths[0].copy()
+
+
+def _atomic_line_wavelengths(level_file, radiative_file, lines):
+    """Resolve globally unlisted transitions from the matching LV/LA files."""
+    from astropy.io import fits
+    from .units import HC_KEV_ANGSTROM
+
+    with fits.open(level_file, memmap=False) as hdus:
+        energies = np.asarray(hdus[1].data["ENERGY"], dtype=float).copy()
+    with fits.open(radiative_file, memmap=False) as hdus:
+        rows = hdus[1].data
+        result = []
+        for line in lines:
+            matched = rows[(rows["UPPER_LEV"] == line.upper)
+                           & (rows["LOWER_LEV"] == line.lower)]
+            wavelength = np.nan
+            if len(matched) == 1:
+                for name in ("WAVE_OBS", "WAVELEN", "WAVELENGTH", "LAMBDA"):
+                    if name not in rows.dtype.names:
+                        continue
+                    candidate = float(matched[name][0])
+                    if np.isfinite(candidate) and candidate > 0:
+                        wavelength = candidate
+                        break
+            if not np.isfinite(wavelength) or wavelength <= 0:
+                energy = energies[line.upper - 1] - energies[line.lower - 1]
+                if not np.isfinite(energy) or energy <= 0:
+                    raise ValueError("cannot resolve a missing triplet wavelength from atomic data")
+                wavelength = HC_KEV_ANGSTROM * 1000. / energy  # LV energies are eV.
+            result.append(wavelength)
+    return tuple(result)
+
+
 def _interpolate_native_lines(grid, temperature):
     """Interpolate complete native lines linearly in temperature.
 
@@ -92,3 +173,4 @@ def _read_native_lines(path, lines):
     for array in (temperatures, emissivities, wavelengths):
         array.setflags(write=False)
     return _NativeLineGrid(temperatures, emissivities, wavelengths, lines)
+

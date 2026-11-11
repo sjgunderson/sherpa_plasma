@@ -53,6 +53,8 @@ def _require_dem_reference():
 
 
 @pytest.mark.parametrize("model,parameters", [
+    ("wdem", {"Tmax": 1., "beta": .1, "Redshift": .02, "abundanc": .6}),
+    ("wdem", {"Tmax": .3, "beta": .5, "Redshift": .02, "abundanc": .6}),
     ("wdem", {"Tmax": .8, "beta": .5, "Redshift": .02, "abundanc": .6}),
     ("wdem", {"Tmax": .7, "beta": .7, "Redshift": .05, "abundanc": 1.4,
               "inv_slope": .5, "norm": .3}),
@@ -115,7 +117,7 @@ def test_characterize_dem_isolated_sodium(model, parameters):
         assert all(row["nonzero_bins"] > 1 for row in lines)
 
 
-def test_wdem_rejects_unverified_configurations_and_out_of_coverage():
+def test_wdem_accepts_full_dem_and_rejects_unverified_configurations():
     _require_dem_reference()
     from sherpa.astro import xspec
     from sherpa_plasma import wrap_triplet_pumping
@@ -126,8 +128,7 @@ def test_wdem_rejects_unverified_configurations_and_out_of_coverage():
     wrapper = wrap_triplet_pumping(child, ["Na"])
     edges = np.linspace(1., 1.2, 2001)
     wrapper.p_Na = 1.
-    with pytest.raises(ValueError, match="incomplete|outside"):
-        wrapper(edges[:-1], edges[1:])
+    assert np.isfinite(wrapper(edges[:-1], edges[1:])).all()
     child.Tmax = .8
     child.beta = .5
     child.switch = 1
@@ -140,24 +141,23 @@ def test_wdem_rejects_unverified_configurations_and_out_of_coverage():
 
 
 @pytest.mark.parametrize("parameter", ["Na", "norm"])
-def test_pumping_checks_temperature_even_at_zero_scale(parameter):
+def test_pumping_supports_cold_temperature_at_zero_scale(parameter):
     child, wrapper = _model()
     child.kT = .1
     getattr(child, parameter).val = 0.
     wrapper.p_Na = 1.
     edges = np.linspace(1., 1.2, 2001)
-    with pytest.raises(ValueError, match="outside complete triplet coverage"):
-        wrapper(edges[:-1], edges[1:])
+    np.testing.assert_array_equal(
+        wrapper(edges[:-1], edges[1:]), child(edges[:-1], edges[1:]))
 
 
 @pytest.mark.parametrize("kind", [
     "XSwdem", "XSvwdem", "XSvvwdem", "XSbwdem", "XSbvwdem", "XSbvvwdem",
 ])
-def test_silicon_default_wdem_drops_only_negligible_tail_emission(kind):
+def test_silicon_default_wdem_integrates_every_active_temperature(kind):
     _require_dem_reference()
     from sherpa.astro import xspec
     from sherpa_plasma import wrap_triplet_pumping
-    from sherpa_plasma._uv_coverage import _coverage_bound, _COVERAGE_TOLERANCE
 
     xspec.set_xsabund("angr")
     xspec.set_xsxset("APECROOT", ROOT)
@@ -182,10 +182,9 @@ def test_silicon_default_wdem_drops_only_negligible_tail_emission(kind):
     covered = ((temperatures >= record["temperature_min_keV"])
                & (temperatures <= record["temperature_max_keV"]))
     assert np.count_nonzero(active & ~covered) > 0
-    bound = _coverage_bound(temperatures, weights, record, grid, active, covered)
-    assert 0 < bound <= _COVERAGE_TOLERANCE
     diagnostic, = wrapper.diagnostics()
-    assert diagnostic["temperature_count"] == np.count_nonzero(active & covered)
+    assert diagnostic["temperature_count"] == np.count_nonzero(active)
+    assert diagnostic["coverage_policy"] == "full_dem"
     assert diagnostic["R_integrated"] == pytest.approx(diagnostic["R0_integrated"] / 2)
     # Changing the pumping strength must reuse captured weights and profiles.
     with patch("sherpa_plasma._uv_model._capture_cie_evaluation",
@@ -243,8 +242,7 @@ def test_wdem_multiple_ions_and_inactive_coverage():
     both.p_Na = 0.
     both(edges[:-1], edges[1:])
     both.p_Na = 1.
-    with pytest.raises(ValueError, match="Na temperature is outside"):
-        both(edges[:-1], edges[1:])
+    assert np.isfinite(both(edges[:-1], edges[1:])).all()
 
 
 @pytest.mark.parametrize(("model", "element", "abundance"), [
@@ -312,6 +310,8 @@ def test_variable_wdem_against_isolated_lines(model, element, abundance):
 
 
 @pytest.mark.parametrize(("model", "parameters"), [
+    ("bvwdem", {"Tmax": 1., "beta": .1, "Redshift": .02, "Velocity": 1000.,
+                "Na": .6}),
     ("bwdem", {"Tmax": .8, "beta": .5, "Redshift": .02, "Velocity": 0.}),
     ("bvwdem", {"Tmax": .8, "beta": .5, "Redshift": .02, "Velocity": 1000.,
                 "Na": .6}),
@@ -544,10 +544,12 @@ def test_broadened_profile_temperature_coverage_endpoints(endpoint):
     assert _xspec_profiles._snapshot_db() == before
     np.testing.assert_allclose(actual, emissivities * 1.e14 * scale,
                                rtol=2.e-8, atol=1.e-18)
-    with pytest.raises(RuntimeError, match="invalid DEM weights or temperatures"):
-        _xspec_profiles.project(profiles, edges,
-                                [record["temperature_max_keV"] * 1.01],
-                                [1.], 0., 1000.)
+    outside = record["temperature_max_keV"] * 1.01
+    from sherpa_plasma._uv_lines import _integrate_triplet
+    expected, _ = _integrate_triplet(grid, [outside], [1.])
+    actual = np.asarray(_xspec_profiles.project(
+        profiles, edges, [outside], [1.], 0., 1000.)).sum(axis=1)
+    np.testing.assert_allclose(actual, expected * 1.e14 * scale, rtol=2.e-8, atol=1.e-18)
 
 
 @pytest.mark.parametrize("element", ["O", "Na", "P", "Fe"])
@@ -569,8 +571,7 @@ def test_broadened_profile_native_grid_fluxes(element):
         (c["metastable"], *c["triplet_p"][1:]), record["temperature_min_keV"],
         record["temperature_max_keV"], wrapper._manifest["line_file_sha256"],
         wrapper._manifest["continuum_file_sha256"], wrapper._data_identities)
-    active = np.flatnonzero((grid.temperatures >= record["temperature_min_keV"])
-                            & (grid.temperatures <= record["temperature_max_keV"]))
+    active = np.arange(len(grid.temperatures))
     wavelength = grid.wavelengths[active[0]]
     energies = 12.39841974 / wavelength
     edges = np.linspace(float(energies.min() * .95),
@@ -1240,17 +1241,17 @@ def test_multiple_ions_add_independent_corrections():
     )
 
 
-def test_nonoverlapping_temperature_coverage_is_reported():
+def test_nonoverlapping_triplet_presence_does_not_restrict_temperature():
     from sherpa_plasma._uv_model import _TripletPumpingModel
 
     child, _ = _model()
     wrapper = _TripletPumpingModel(child, ["C", "Fe"])
     assert wrapper.temperature_coverage()["active_intersection_keV"] is None
     wrapper.p_C = wrapper.p_Fe = 1.
-    assert wrapper.temperature_coverage()["active_intersection_keV"] == ()
+    assert wrapper.temperature_coverage()["active_intersection_keV"] is not None
+    assert wrapper.temperature_coverage()["policy"] == "full_dem"
     edges = np.linspace(.2, 8., 10001)
-    with pytest.raises(ValueError, match="outside complete triplet coverage"):
-        wrapper(edges[:-1], edges[1:])
+    assert np.isfinite(wrapper(edges[:-1], edges[1:])).all()
 
 
 @pytest.mark.parametrize(("element", "forbidden_ev", "intercombination_ev"), [

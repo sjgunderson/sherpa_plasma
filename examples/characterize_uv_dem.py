@@ -84,7 +84,7 @@ def _evaluate(root, args, fixed_weights=None):
 def _run(args):
     from astropy.io import fits
     from sherpa.astro import xspec
-    from sherpa_plasma._uv_lines import _interpolate_native_lines, _read_native_lines
+    from sherpa_plasma._uv_lines import _integrate_triplet, _prepare_triplet_grid, _read_native_lines
     from sherpa_plasma._uv_model import _file_identity, _file_sha256, _MANIFESTS
     from sherpa_plasma.plasma import LineID, _SYMBOLS
     import sherpa_plasma
@@ -106,7 +106,7 @@ def _run(args):
     calibration = record["calibration"]
     lines = tuple(LineID(args.element, args.element - 1, upper, calibration["ground"])
                   for upper in (calibration["metastable"], *calibration["triplet_p"][1:]))
-    grid = _read_native_lines(line_file, lines)
+    grid = _prepare_triplet_grid(_read_native_lines(line_file, lines))
     baseline = _evaluate(root, args)
     temperatures = np.asarray(baseline["temperatures"], dtype=float)
     weights = np.asarray(baseline["weights"], dtype=float)
@@ -115,13 +115,7 @@ def _run(args):
             or np.any(weights < 0)):
         raise ValueError("captured temperature weights are invalid")
     active = weights > 0
-    emissivities = np.array([
-        _interpolate_native_lines(grid, temperature)[0]
-        for temperature in temperatures[active]
-    ])
-    if not len(emissivities):
-        raise ValueError("captured DEM has no nonzero weights")
-    weighted_emissivities = weights[active] @ emissivities
+    weighted_emissivities, _ = _integrate_triplet(grid, temperatures, weights)
     params = {name.lower(): value for name, value in baseline["parameters"].items()}
     if params["switch"] != 2:
         raise ValueError("only switch=2 (AtomDB) can be compared with APEC line files")

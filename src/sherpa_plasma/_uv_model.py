@@ -12,10 +12,11 @@ from sherpa.astro import xspec
 from sherpa.models.model import ArithmeticModel, CompositeModel
 from sherpa.models.parameter import Parameter
 
-from ._uv_coverage import (
-    _COVERAGE_TOLERANCE, _coverage_bound, _dem_active_weights, _validated_dem_weights,
+from ._uv_coverage import _validated_dem_weights
+from ._uv_lines import (
+    _atomic_line_wavelengths, _integrate_triplet, _prepare_triplet_grid,
+    _read_native_lines,
 )
-from ._uv_lines import _interpolate_native_lines, _read_native_lines
 from ._uv_projection import _unbroadened_line_bins
 from ._uv_pumping import _transfer_triplet_photons
 from .plasma import AtomDB, LineID, _element, _SYMBOLS
@@ -62,33 +63,37 @@ def _root():
 
 
 @lru_cache(maxsize=16)
-def _load_grid(line_file, lines, file_hash):
-    return _read_native_lines(line_file, lines)
+def _load_grid(line_file, lines, file_hash, fallback_wavelengths=()):
+    return _prepare_triplet_grid(
+        _read_native_lines(line_file, lines), fallback_wavelengths)
 
 
 @lru_cache(maxsize=4)
 def _load_broad_profiles(library_path, root, element, ground, upper, minimum, maximum,
-                         file_hash, continuum_hash, identities):
+                         file_hash, continuum_hash, identities, wavelengths=()):
     from . import _xspec_profiles
 
     paths = (Path(root + "_line.fits"), Path(root + "_coco.fits"))
     if tuple(_file_identity(path) for path in paths) != identities:
         raise RuntimeError("APEC files changed before native profile loading")
-    profiles = _xspec_profiles.create(library_path, root, element, ground, upper, minimum, maximum)
+    profiles = _xspec_profiles.create(
+        library_path, root, element, ground, upper, minimum, maximum, wavelengths)
     if tuple(_file_identity(path) for path in paths) != identities:
         raise RuntimeError("APEC files changed during native profile loading")
     return profiles
 
 
 def _temperature_interval(grid):
-    complete = (np.isfinite(grid.emissivities).all(axis=1)
-                & np.isfinite(grid.wavelengths).all(axis=1)
-                & (grid.emissivities[:, 1] + grid.emissivities[:, 2] > 0))
-    indices = np.flatnonzero(complete)
-    if (len(indices) < 2 or np.any(np.diff(indices) != 1)
-            or not np.all(grid.wavelengths[indices] == grid.wavelengths[indices[0]])):
-        raise ValueError("selected triplet has discontinuous or unsupported temperature coverage")
-    return float(grid.temperatures[indices[0]]), float(grid.temperatures[indices[-1]])
+    return float(grid.temperatures[0]), float(grid.temperatures[-1])
+
+
+def _ratio_diagnostic(forbidden, intercombination, pumping):
+    if intercombination > 0:
+        r0 = float(forbidden / intercombination)
+        return r0, r0 / (1 + pumping), "defined"
+    if forbidden > 0:
+        return float("inf"), float("inf"), "no_intercombination_emission"
+    return None, None, "no_triplet_emission"
 
 
 def _installed_manifest(provider, selected, line_file, hashes):
@@ -114,7 +119,8 @@ def _installed_manifest(provider, selected, line_file, hashes):
         calibration = provider._calibration(z, atomic_files)
         upper = (calibration.metastable, *calibration.triplet_p[1:])
         lines = tuple(LineID(z, z - 1, index, calibration.ground) for index in upper)
-        grid = _load_grid(str(line_file), lines, hashes[0])
+        wavelengths = _atomic_line_wavelengths(level, radiative, lines)
+        grid = _load_grid(str(line_file), lines, hashes[0], wavelengths)
         low, high = _temperature_interval(grid)
         manifest["ions"][str(z)] = {
             "calibration": asdict(calibration),
@@ -124,6 +130,7 @@ def _installed_manifest(provider, selected, line_file, hashes):
             "radiative_file_sha256": _file_sha256(radiative, atomic_identities[1]),
             "temperature_min_keV": low,
             "temperature_max_keV": high,
+            "line_wavelengths_A": tuple(grid.wavelengths[0]),
         }
         files.extend(atomic_files)
         identities.extend(atomic_identities)
@@ -146,11 +153,12 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
     """Source-level He-like triplet pumping correction for a plasma component."""
 
     def __init__(self, child, elements, *, name=None, atomdb=None,
-                 coverage_tolerance=_COVERAGE_TOLERANCE):
-        coverage_tolerance = float(coverage_tolerance)
-        if not np.isfinite(coverage_tolerance) or not 0 <= coverage_tolerance < 1:
-            raise ValueError("coverage_tolerance must be finite and in [0, 1)")
-        self._coverage_tolerance = coverage_tolerance
+                 coverage_tolerance=None):
+        # Accepted for compatibility with the former bounded-tail implementation.
+        if coverage_tolerance is not None:
+            coverage_tolerance = float(coverage_tolerance)
+            if not np.isfinite(coverage_tolerance) or not 0 <= coverage_tolerance < 1:
+                raise ValueError("coverage_tolerance must be finite and in [0, 1)")
         kind = type(child)
         wdem_types = tuple(
             cls for cls in (getattr(xspec, name, None)
@@ -243,6 +251,10 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
                 from . import _xspec_profiles
             except ImportError as exc:
                 raise ImportError("broadened wdem requires the optional XSPEC profile bridge") from exc
+            if not hasattr(_xspec_profiles, "project_transfer"):
+                raise ImportError(
+                    "full-DEM triplet pumping requires a rebuilt XSPEC profile bridge; "
+                    "install with SHERPA_PLASMA_BUILD_XSPEC_BRIDGE=1")
         self._is_wdem = is_wdem
         self._is_broadened = is_broadened
         self._is_mkcflow = is_mkcflow
@@ -261,15 +273,13 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
         for z in selected:
             record = manifest["ions"].get(str(z))
             if record is None:
-                raise ValueError(f"{_SYMBOLS[z]} has no validated complete-triplet calibration")
+                raise ValueError(f"{_SYMBOLS[z]} has no triplet atomic calibration; provide matching AtomDB data")
             calibration = record["calibration"]
             upper = (calibration["metastable"], *calibration["triplet_p"][1:])
             lines = tuple(LineID(z, z - 1, index, calibration["ground"])
                           for index in upper)
-            grid = _load_grid(str(line_file), lines, file_hash)
-            interval = _temperature_interval(grid)
-            if interval != (record["temperature_min_keV"], record["temperature_max_keV"]):
-                raise ValueError(f"{_SYMBOLS[z]} temperature coverage differs from calibration")
+            grid = _load_grid(str(line_file), lines, file_hash,
+                              tuple(record.get("line_wavelengths_A", ())))
             self._entries.append((record, grid, actual[_SYMBOLS[z]] / reference[_SYMBOLS[z]]))
             symbol = _SYMBOLS[z]
             if is_wdem and kind not in (getattr(xspec, "XSwdem", None),
@@ -343,8 +353,8 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
     def temperature_coverage(self):
         self._check_state()
         intervals = {
-            _SYMBOLS[z]: (record["temperature_min_keV"], record["temperature_max_keV"])
-            for z, (record, _, _) in zip(self._selected, self._entries)
+            _SYMBOLS[z]: _temperature_interval(grid)
+            for z, (_, grid, _) in zip(self._selected, self._entries)
         }
         active = [intervals[_SYMBOLS[z]] for z, parameter in
                   zip(self._selected, self._pumping.pars) if parameter.val > 0]
@@ -352,7 +362,8 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
         if active:
             low, high = max(interval[0] for interval in active), min(interval[1] for interval in active)
             intersection = (low, high) if low <= high else ()
-        return {"ions_keV": intervals, "active_intersection_keV": intersection}
+        return {"ions_keV": intervals, "active_intersection_keV": intersection,
+                "policy": "full_dem", "outside_native_grid": "nearest_endpoint"}
 
     def diagnostics(self):
         self._check_state()
@@ -362,18 +373,18 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
         results = []
         for z, parameter, (record, grid, _) in zip(
                 self._selected, self._pumping.pars, self._entries):
-            emissivities, _ = _interpolate_native_lines(grid, temperature)
+            emissivities, _ = _integrate_triplet(grid, [temperature], [1.])
             f, i1, i2 = emissivities
-            if i1 + i2 <= 0:
-                raise ValueError(f"{_SYMBOLS[z]} intercombination flux is zero")
-            r0 = float(f / (i1 + i2))
+            r0, ratio, status = _ratio_diagnostic(f, i1 + i2, float(parameter.val))
             c = record["calibration"]
             results.append({
                 "element": _SYMBOLS[z],
                 "ion": z - 1,
                 "p": float(parameter.val),
                 "R0": r0,
-                "R": r0 / (1 + float(parameter.val)),
+                "R": ratio,
+                "ratio_status": status,
+                "intrinsic_triplet_fluxes": (float(f), float(i1), float(i2)),
                 "atomdb_version": self._manifest["version"],
                 "line_file_sha256": self._manifest["line_file_sha256"],
                 "continuum_file_sha256": self._manifest["continuum_file_sha256"],
@@ -385,8 +396,7 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
                 "forbidden_rate_s-1": c["forbidden_rate"],
                 "effective_branching": c["effective_branching"],
                 "intercombination_redistribution": tuple(c["redistribution"]),
-                "temperature_range_keV": (record["temperature_min_keV"],
-                                          record["temperature_max_keV"]),
+                "temperature_range_keV": _temperature_interval(grid),
                 "omitted_decay_fraction": tuple(c["omitted_decay_fraction"]),
                 "profile": "unbroadened XSPEC 12.14.0k",
             })
@@ -406,26 +416,21 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
         results = []
         for z, parameter, (record, grid, _) in zip(
                 self._selected, self._pumping.pars, self._entries):
-            active = _dem_active_weights(
-                temperatures, weights, record, grid, _SYMBOLS[z],
-                tolerance=self._coverage_tolerance)
-            entries = []
-            for temperature in temperatures[active]:
-                emissivities, _ = _interpolate_native_lines(grid, temperature)
-                entries.append(emissivities)
-            f, i1, i2 = weights[active] @ np.asarray(entries)
-            if i1 + i2 <= 0:
-                raise ValueError(f"{_SYMBOLS[z]} intercombination flux is zero")
-            r0 = float(f / (i1 + i2))
+            active = weights > 0
+            (f, i1, i2), _ = _integrate_triplet(grid, temperatures, weights)
+            r0, ratio, status = _ratio_diagnostic(f, i1 + i2, float(parameter.val))
             results.append({
                 "element": _SYMBOLS[z],
                 "ion": z - 1,
                 "p": float(parameter.val),
                 "R0_integrated": r0,
-                "R_integrated": r0 / (1 + float(parameter.val)),
+                "R_integrated": ratio,
+                "ratio_status": status,
+                "intrinsic_triplet_fluxes": (float(f), float(i1), float(i2)),
                 "temperature_range_keV": (float(temperatures[active].min()),
                                           float(temperatures[active].max())),
-                "coverage_keV": (record["temperature_min_keV"], record["temperature_max_keV"]),
+                "coverage_keV": _temperature_interval(grid),
+                "coverage_policy": "full_dem",
                 "temperature_count": int(np.count_nonzero(active)),
                 "atomdb_version": self._manifest["version"],
                 "line_file_sha256": self._manifest["line_file_sha256"],
@@ -507,32 +512,21 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
                          if source[0] == "parameter" else source[1])
             if abundance < 0:
                 raise ValueError("element abundance must be nonnegative")
-            active = _dem_active_weights(
-                temperatures, weights, record, grid, _SYMBOLS[z],
-                tolerance=self._coverage_tolerance)
+            active = weights > 0
             if abundance == 0 or norm == 0:
                 continue
             calibration = record["calibration"]
             eta1, eta2 = calibration["redistribution"]
-            integrated = np.zeros(3)
-            wavelengths = None
-            for temperature, weight in zip(temperatures[active], weights[active]):
-                emissivities, wavelengths = _interpolate_native_lines(grid, temperature)
-                integrated += weight * emissivities
-            f, i1, i2 = integrated
-            if i1 + i2 <= 0:
-                raise ValueError(f"{_SYMBOLS[z]} intercombination flux is zero")
+            (f, i1, i2), wavelengths = _integrate_triplet(grid, temperatures, weights)
             transfer = _transfer_triplet_photons(f, i1, i2, value)
+            if transfer == 0:
+                continue
             if self._is_broadened:
                 if (lo.ndim != 1 or hi.ndim != 1 or len(lo) < 2 or len(lo) != len(hi)
                         or not np.isfinite(lo).all() or not np.isfinite(hi).all()
                         or np.any(lo <= 0) or np.any(hi <= lo)
                         or not np.array_equal(hi[:-1], lo[1:])):
                     raise ValueError("XSPEC projection requires at least two contiguous ordered energy bins")
-                if transfer == 0:
-                    continue
-                if i1 <= 0 or i2 <= 0:
-                    raise ValueError(f"{_SYMBOLS[z]} broadened triplet requires both intercombination line fluxes to be positive")
                 from . import _xspec_profiles
 
                 upper = (calibration["metastable"], *calibration["triplet_p"][1:])
@@ -541,19 +535,41 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
                     with _CAPTURE_LOCK:
                         profiles = _load_broad_profiles(
                             self._library_path, str(_root()), z, calibration["ground"],
-                            upper, record["temperature_min_keV"], record["temperature_max_keV"],
+                            upper, *_temperature_interval(grid),
                             self._manifest["line_file_sha256"],
-                            self._manifest["continuum_file_sha256"], self._data_identities[:2])
+                            self._manifest["continuum_file_sha256"], self._data_identities[:2],
+                            tuple(wavelengths))
                         projected = np.asarray(_xspec_profiles.project(
                             profiles, np.concatenate((lo[:1], hi)), temperatures[active], weights[active],
                             redshift, float(child_parameters[names["velocity"]])))
                     self._check_state()
                     self._profile_cache[z] = projected
+                additions = []
+                donor = None
+                for index, flux in ((1, i1), (2, i2)):
+                    if flux > 0:
+                        additions.append(projected[index] / flux)
+                    else:
+                        if donor is None:
+                            donor = self._profile_cache.get((z, "donor"))
+                            if donor is None:
+                                with _CAPTURE_LOCK:
+                                    profiles = _load_broad_profiles(
+                                        self._library_path, str(_root()), z, calibration["ground"],
+                                        upper, *_temperature_interval(grid),
+                                        self._manifest["line_file_sha256"],
+                                        self._manifest["continuum_file_sha256"],
+                                        self._data_identities[:2], tuple(wavelengths))
+                                    donor = np.asarray(_xspec_profiles.project_transfer(
+                                        profiles, np.concatenate((lo[:1], hi)),
+                                        temperatures[active], weights[active], redshift,
+                                        float(child_parameters[names["velocity"]])))
+                                self._check_state()
+                                self._profile_cache[(z, "donor")] = donor
+                        additions.append(donor[index] / f)
                 with np.errstate(over="raise", invalid="raise", divide="raise"):
-                    output += abundance_scale * abundance * norm * (
-                        -transfer / f * projected[0]
-                        + eta1 * transfer / i1 * projected[1]
-                        + eta2 * transfer / i2 * projected[2])
+                    output += abundance_scale * abundance * norm * transfer * (
+                        -projected[0] / f + eta1 * additions[0] + eta2 * additions[1])
                 continue
             bins = _unbroadened_line_bins(lo, hi, wavelengths, redshift)
             transfer *= 1.e14 * abundance_scale * abundance * norm / (1 + redshift)
@@ -564,16 +580,17 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
 
 
 def wrap_triplet_pumping(child, elements, *, name=None, atomdb=None,
-                         coverage_tolerance=_COVERAGE_TOLERANCE):
+                         coverage_tolerance=None):
     """Wrap a supported component with AtomDB-backed triplet suppression.
 
     ``atomdb`` may be an AtomDB connection or AtomDBTripletProvider whose
     line and continuum files match the active XSPEC APEC files. Without one,
     a bundled calibration is used when available; otherwise $ATOMDB is used.
 
-    DEM tails outside complete triplet coverage are omitted only when their
-    maximum per-line discarded-fraction bound is at most ``coverage_tolerance``
-    (default 1e-4). Set this to zero for strict nonzero-emission coverage.
+    Each transition is integrated independently over the full captured DEM.
+    Missing native line entries contribute zero. Temperatures beyond the native
+    table use its nearest endpoint, matching XSPEC. ``coverage_tolerance`` is
+    accepted for compatibility and has no effect; no DEM bins are discarded.
     """
     return _TripletPumpingModel(
         child, elements, name=name, atomdb=atomdb,
