@@ -1,0 +1,692 @@
+{
+  "version": "3.0.9",
+  "line_file_sha256": "b268e54de23836607c47e8282a892c2c992d9cfd7c2c99606f4a98d6df8af883",
+  "continuum_file_sha256": "4ee708642db82333c907ce743a14f0ffad9542172886887a226e50236b4a6f74",
+  "filemap_sha256": "f64671249eb07111552cc53eb50d06d4846194bb8138d73481b7b4a656cb7070",
+  "ions": {
+    "6": {
+      "calibration": {
+        "element": 6,
+        "ion": 5,
+        "ground": 1,
+        "metastable": 2,
+        "triplet_p": [
+          4,
+          5,
+          6
+        ],
+        "forbidden_rate": 40.5,
+        "branching": [
+          0.0,
+          0.23036649214659685,
+          0.0004169706077765886
+        ],
+        "effective_branching": 0.07702048105318593,
+        "redistribution": [
+          0.9969923540565679,
+          0.003007645943432109
+        ],
+        "omitted_decay_fraction": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reference_temperature_keV": 0.08617384731769562,
+      "level_file": "APED/c/c_5/c_5_LV_v3_0_9_a.fits",
+      "level_file_sha256": "113726d1efe337b9063c3376ff63feb48307be3c111fb6c723d7090f701ebd43",
+      "radiative_file": "APED/c/c_5/c_5_LA_v3_0_9_a.fits",
+      "radiative_file_sha256": "e596b8659a7ba64e6055a2a5f58dfcebe1f851ebb86e57d346553fbaaa5b8b8e",
+      "temperature_min_keV": 0.03849244490265846,
+      "temperature_max_keV": 0.18212749063968658
+    },
+    "7": {
+      "calibration": {
+        "element": 7,
+        "ion": 6,
+        "ground": 1,
+        "metastable": 2,
+        "triplet_p": [
+          4,
+          5,
+          6
+        ],
+        "forbidden_rate": 217.0,
+        "branching": [
+          0.0,
+          0.5698461538456383,
+          0.0013804716970613662
+        ],
+        "effective_branching": 0.19071564666913574,
+        "redistribution": [
+          0.99597867962119,
+          0.004021320378809954
+        ],
+        "omitted_decay_fraction": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reference_temperature_keV": 0.12893638014793396,
+      "level_file": "APED/n/n_6/n_6_LV_v3_0_9_a.fits",
+      "level_file_sha256": "1d6a7a2d1994b13694b7ffd3b3eee97d1c1044911b905f4029094b01c89a08e1",
+      "radiative_file": "APED/n/n_6/n_6_LA_v3_0_9_a.fits",
+      "radiative_file_sha256": "e7c96e16600bd4b347c58c319705cdc8006c6d039c7b6848ef0b9539297cbeed",
+      "temperature_min_keV": 0.05437202379107475,
+      "temperature_max_keV": 0.288652628660202
+    },
+    "8": {
+      "calibration": {
+        "element": 8,
+        "ion": 7,
+        "ground": 1,
+        "metastable": 2,
+        "triplet_p": [
+          4,
+          5,
+          6
+        ],
+        "forbidden_rate": 912.0,
+        "branching": [
+          0.0,
+          0.8252531781928717,
+          0.0037889462044201567
+        ],
+        "effective_branching": 0.27718936284452395,
+        "redistribution": [
+          0.9924060214181216,
+          0.007593978581878503
+        ],
+        "omitted_decay_fraction": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reference_temperature_keV": 0.22928492724895477,
+      "level_file": "APED/o/o_7/o_7_LV_v3_0_9_a.fits",
+      "level_file_sha256": "a92f22fe18b408b7d22270b29cb2d79f70f994035e8c2bc39c7a1f732754af1c",
+      "radiative_file": "APED/o/o_7/o_7_LA_v3_0_9_a.fits",
+      "radiative_file_sha256": "a467ff6daae9eff1f6c8f0eed28e2ff9a1d4d43e6f032f3f6c3098dbc0e0c227",
+      "temperature_min_keV": 0.05437202379107475,
+      "temperature_max_keV": 0.9668865203857422
+    },
+    "10": {
+      "calibration": {
+        "element": 10,
+        "ion": 9,
+        "ground": 1,
+        "metastable": 2,
+        "triplet_p": [
+          4,
+          5,
+          6
+        ],
+        "forbidden_rate": 9770.0,
+        "branching": [
+          0.0,
+          0.9742962056269682,
+          0.01913178330505653
+        ],
+        "effective_branching": 0.33539417037846525,
+        "redistribution": [
+          0.9683096219738409,
+          0.03169037802615916
+        ],
+        "omitted_decay_fraction": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reference_temperature_keV": 0.40773266553878784,
+      "level_file": "APED/ne/ne_9/ne_9_LV_v3_0_9_a.fits",
+      "level_file_sha256": "b1c8761cdf2dcdae1d3ad62353d5ca76b2e3dd4176428003766c25e830a010c8",
+      "radiative_file": "APED/ne/ne_9/ne_9_LA_v3_0_9_a.fits",
+      "radiative_file_sha256": "9dcfc6a23d0c80fd47a80e9f1af171cd28e73f61b825ba413a1d7b3808925c1a",
+      "temperature_min_keV": 0.0966886505484581,
+      "temperature_max_keV": 1.719394326210022
+    },
+    "11": {
+      "calibration": {
+        "element": 11,
+        "ion": 10,
+        "ground": 1,
+        "metastable": 2,
+        "triplet_p": [
+          3,
+          4,
+          5
+        ],
+        "forbidden_rate": 26600.0,
+        "branching": [
+          0.0,
+          0.9891836925878781,
+          0.0371422980163399
+        ],
+        "effective_branching": 0.3503625075383704,
+        "redistribution": [
+          0.9411049749807692,
+          0.05889502501923082
+        ],
+        "omitted_decay_fraction": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reference_temperature_keV": 0.43086666310724997,
+      "level_file": "APED/na/na_10/na_10_LV_v3_0_9_a.fits",
+      "level_file_sha256": "f3e1d1fe0451735de8e4db60d0d98160bad1b39e45f06397fdeaad69234dc8e7",
+      "radiative_file": "APED/na/na_10/na_10_LA_v3_0_7_a.fits",
+      "radiative_file_sha256": "a6232e9142a3c22df4960913ad0deb8340b6ea58993676099fe4452d44ba4f08",
+      "temperature_min_keV": 0.20435039699077606,
+      "temperature_max_keV": 0.9127997159957886
+    },
+    "12": {
+      "calibration": {
+        "element": 12,
+        "ion": 11,
+        "ground": 1,
+        "metastable": 2,
+        "triplet_p": [
+          4,
+          5,
+          6
+        ],
+        "forbidden_rate": 66300.0,
+        "branching": [
+          0.0,
+          0.9950438430679375,
+          0.06577517808726249
+        ],
+        "effective_branching": 0.3682230466266806,
+        "redistribution": [
+          0.9007618822897212,
+          0.09923811771027868
+        ],
+        "omitted_decay_fraction": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reference_temperature_keV": 0.6845031976699829,
+      "level_file": "APED/mg/mg_11/mg_11_LV_v3_0_9_a.fits",
+      "level_file_sha256": "f56a715c60dfdc2c61067b9bb7473832da8f72c900582407319fc66a1e58f426",
+      "radiative_file": "APED/mg/mg_11/mg_11_LA_v3_0_9_a.fits",
+      "radiative_file_sha256": "2f9fe3889be24fa32890e1aaaf0b350be931b87348c3e60301a26b9020047b7a",
+      "temperature_min_keV": 0.15324118733406067,
+      "temperature_max_keV": 3.057563543319702
+    },
+    "13": {
+      "calibration": {
+        "element": 13,
+        "ion": 12,
+        "ground": 1,
+        "metastable": 2,
+        "triplet_p": [
+          4,
+          5,
+          6
+        ],
+        "forbidden_rate": 153000.0,
+        "branching": [
+          0.0,
+          0.9975780363719142,
+          0.10760448824304532
+        ],
+        "effective_branching": 0.39230628337010764,
+        "redistribution": [
+          0.8476183902274261,
+          0.15238160977257392
+        ],
+        "omitted_decay_fraction": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reference_temperature_keV": 0.7250626087188721,
+      "level_file": "APED/al/al_12/al_12_LV_v3_0_9_a.fits",
+      "level_file_sha256": "b83c3be89675371fbab769f60563a6d4a99e76593ff7724375f1d870fb4fe397",
+      "radiative_file": "APED/al/al_12/al_12_LA_v3_0_9_a.fits",
+      "radiative_file_sha256": "518da7f38e15b4004768f629249275d967fab54346f6c87c9dcd73d84234fa2c",
+      "temperature_min_keV": 0.24287091195583344,
+      "temperature_max_keV": 2.043503999710083
+    },
+    "14": {
+      "calibration": {
+        "element": 14,
+        "ion": 13,
+        "ground": 1,
+        "metastable": 2,
+        "triplet_p": [
+          4,
+          5,
+          6
+        ],
+        "forbidden_rate": 331000.0,
+        "branching": [
+          0.0,
+          0.9987274279688244,
+          0.16400687723067747
+        ],
+        "effective_branching": 0.42402407445109563,
+        "redistribution": [
+          0.7851185351170574,
+          0.21488146488294257
+        ],
+        "omitted_decay_fraction": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reference_temperature_keV": 1.1491467952728271,
+      "level_file": "APED/si/si_13/si_13_LV_v3_0_9_a.fits",
+      "level_file_sha256": "2acabdbf18d356a10d36557aa14f52e4ab7358c7cd30c74ef7a373c3ebf2b890",
+      "radiative_file": "APED/si/si_13/si_13_LA_v3_0_9_a.fits",
+      "radiative_file_sha256": "7ef62a9f20d6c351ee78779e53c555be8a940aa197aaeb046ebec4f1116ff4a5",
+      "temperature_min_keV": 0.20435039699077606,
+      "temperature_max_keV": 6.462127208709717
+    },
+    "15": {
+      "calibration": {
+        "element": 15,
+        "ion": 14,
+        "ground": 1,
+        "metastable": 2,
+        "triplet_p": [
+          3,
+          4,
+          5
+        ],
+        "forbidden_rate": 676000.0,
+        "branching": [
+          0.0,
+          0.9993029056381904,
+          0.23274289902274856
+        ],
+        "effective_branching": 0.4624025791142571,
+        "redistribution": [
+          0.7203701222241358,
+          0.2796298777758642
+        ],
+        "omitted_decay_fraction": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reference_temperature_keV": 1.024178147315979,
+      "level_file": "APED/p/p_14/p_14_LV_v3_0_9_a.fits",
+      "level_file_sha256": "04cac9c3f0f608880083cd81002c21c5dfc6ced2a51acb554febe44481625b83",
+      "radiative_file": "APED/p/p_14/p_14_LA_v3_0_7_a.fits",
+      "radiative_file_sha256": "108eea9c7075f25cdeddf8e04d7f8c204f63819fe1cde602e64b9bca9da42a4b",
+      "temperature_min_keV": 0.5133050084114075,
+      "temperature_max_keV": 1.9291921854019165
+    },
+    "16": {
+      "calibration": {
+        "element": 16,
+        "ion": 15,
+        "ground": 1,
+        "metastable": 2,
+        "triplet_p": [
+          4,
+          5,
+          6
+        ],
+        "forbidden_rate": 1320000.0,
+        "branching": [
+          0.0,
+          0.9995963168758745,
+          0.31056891495476846
+        ],
+        "effective_branching": 0.5057370583779406,
+        "redistribution": [
+          0.6588380808589321,
+          0.34116191914106797
+        ],
+        "omitted_decay_fraction": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reference_temperature_keV": 1.719394326210022,
+      "level_file": "APED/s/s_15/s_15_LV_v3_0_9_a.fits",
+      "level_file_sha256": "4bba9a9b2da7f781e7ebbf0c39e912bddd60188f33664a8e8913ec3b4b20be09",
+      "radiative_file": "APED/s/s_15/s_15_LA_v3_0_9_a.fits",
+      "radiative_file_sha256": "79513e1f4c5b910fe549210b1f2ccf5fb14d5278ec637db798f74e18a6fc1a3a",
+      "temperature_min_keV": 0.3057563602924347,
+      "temperature_max_keV": 9.127997398376465
+    },
+    "17": {
+      "calibration": {
+        "element": 17,
+        "ion": 16,
+        "ground": 1,
+        "metastable": 2,
+        "triplet_p": [
+          3,
+          4,
+          6
+        ],
+        "forbidden_rate": 2470000.0,
+        "branching": [
+          0.0,
+          0.999757455287169,
+          0.39225251030921665
+        ],
+        "effective_branching": 0.5511705463786212,
+        "redistribution": [
+          0.6046269860387838,
+          0.39537301396121605
+        ],
+        "omitted_decay_fraction": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reference_temperature_keV": 1.4466900825500488,
+      "level_file": "APED/cl/cl_16/cl_16_LV_v3_0_9_a.fits",
+      "level_file_sha256": "bff6ef0aa4310655b1fdbc092a658f3e3cd749795167cb8ca7e86d610576d19f",
+      "radiative_file": "APED/cl/cl_16/cl_16_LA_v3_0_7_a.fits",
+      "radiative_file_sha256": "522d7a5fbaa6001b22b28ec5a6c3184d6d7c7a2b831e5ec4c5a4b48fd4db4dcb",
+      "temperature_min_keV": 0.6100641489028931,
+      "temperature_max_keV": 3.43064284324646
+    },
+    "18": {
+      "calibration": {
+        "element": 18,
+        "ion": 17,
+        "ground": 1,
+        "metastable": 2,
+        "triplet_p": [
+          4,
+          5,
+          6
+        ],
+        "forbidden_rate": 4450000.0,
+        "branching": [
+          0.0,
+          0.9998472835895541,
+          0.4711795673602917
+        ],
+        "effective_branching": 0.5950488541744579,
+        "redistribution": [
+          0.5600928120356649,
+          0.4399071879643352
+        ],
+        "omitted_decay_fraction": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reference_temperature_keV": 2.043503999710083,
+      "level_file": "APED/ar/ar_17/ar_17_LV_v3_0_9_a.fits",
+      "level_file_sha256": "ffb98da8135ac477bb669179352605c7eab7d4a408ef7d0aee7aeca92147eb0e",
+      "radiative_file": "APED/ar/ar_17/ar_17_LA_v3_0_9_a.fits",
+      "radiative_file_sha256": "ea381b5d3a08cc9fead6494cdf56cb446d4d99c6e0b2b627739c01700d423137",
+      "temperature_min_keV": 0.45748355984687805,
+      "temperature_max_keV": 9.127997398376465
+    },
+    "19": {
+      "calibration": {
+        "element": 19,
+        "ion": 18,
+        "ground": 1,
+        "metastable": 2,
+        "triplet_p": [
+          3,
+          4,
+          6
+        ],
+        "forbidden_rate": 7760000.0,
+        "branching": [
+          0.0,
+          0.9999012392487086,
+          0.5433695690457521
+        ],
+        "effective_branching": 0.6351723958860984,
+        "redistribution": [
+          0.5247404490967675,
+          0.47525955090323246
+        ],
+        "omitted_decay_fraction": [
+          0.0,
+          0.0,
+          7.901568435031784e-16
+        ]
+      },
+      "reference_temperature_keV": 2.043503999710083,
+      "level_file": "APED/k/k_18/k_18_LV_v3_0_9_a.fits",
+      "level_file_sha256": "3fadee4fb5837b41c1e84ef795ff0de79fa6d33940b0ef2a9729c82b30d6f215",
+      "radiative_file": "APED/k/k_18/k_18_LA_v3_0_7_a.fits",
+      "radiative_file_sha256": "f0e8690f795e79093ce46df368211cc5acff2e8141bc94d9f85adf7098b33fc6",
+      "temperature_min_keV": 1.024178147315979,
+      "temperature_max_keV": 3.8492445945739746
+    },
+    "20": {
+      "calibration": {
+        "element": 20,
+        "ion": 19,
+        "ground": 1,
+        "metastable": 2,
+        "triplet_p": [
+          4,
+          5,
+          6
+        ],
+        "forbidden_rate": 13100000.0,
+        "branching": [
+          0.0,
+          0.9999335921841787,
+          0.6074779372792278
+        ],
+        "effective_branching": 0.6707989403276307,
+        "redistribution": [
+          0.49688738585400366,
+          0.5031126141459963
+        ],
+        "omitted_decay_fraction": [
+          0.0,
+          0.0,
+          3.039909282214798e-15
+        ]
+      },
+      "reference_temperature_keV": 2.886526107788086,
+      "level_file": "APED/ca/ca_19/ca_19_LV_v3_0_9_a.fits",
+      "level_file_sha256": "ef7ef788d3d82b19ec394836b4debda7d9801c7361f580fe20a29fdf36d700b5",
+      "radiative_file": "APED/ca/ca_19/ca_19_LA_v3_0_9_a.fits",
+      "radiative_file_sha256": "5b3fa4e63463f61ab927346574388b32167fb30aea411042e1a21a307385801e",
+      "temperature_min_keV": 0.6462126970291138,
+      "temperature_max_keV": 12.893638610839844
+    },
+    "22": {
+      "calibration": {
+        "element": 22,
+        "ion": 21,
+        "ground": 1,
+        "metastable": 2,
+        "triplet_p": [
+          3,
+          4,
+          6
+        ],
+        "forbidden_rate": 34900000.0,
+        "branching": [
+          0.0,
+          0.9999674252926188,
+          0.7079940105304922
+        ],
+        "effective_branching": 0.726652480947813,
+        "redistribution": [
+          0.4587104530911447,
+          0.5412895469088553
+        ],
+        "omitted_decay_fraction": [
+          0.0,
+          0.0,
+          2.3091808393039305e-14
+        ]
+      },
+      "reference_temperature_keV": 3.057563543319702,
+      "level_file": "APED/ti/ti_21/ti_21_LV_v3_0_9_a.fits",
+      "level_file_sha256": "3f9a3648f2c91b7485fe560b47276eef005ac35e35c5c4e328274c35c6644aab",
+      "radiative_file": "APED/ti/ti_21/ti_21_LA_v3_0_7_a.fits",
+      "radiative_file_sha256": "643fca5e5638c39eecfc5b1e9d63501554184eb94518c707ee9e6a2ecdea1375",
+      "temperature_min_keV": 1.719394326210022,
+      "temperature_max_keV": 5.437202453613281
+    },
+    "24": {
+      "calibration": {
+        "element": 24,
+        "ion": 23,
+        "ground": 1,
+        "metastable": 2,
+        "triplet_p": [
+          3,
+          4,
+          6
+        ],
+        "forbidden_rate": 85200000.0,
+        "branching": [
+          0.0,
+          0.9999824105538715,
+          0.7765701397028767
+        ],
+        "effective_branching": 0.764755325575111,
+        "redistribution": [
+          0.4358629214203605,
+          0.5641370785796395
+        ],
+        "omitted_decay_fraction": [
+          0.0,
+          0.0,
+          1.0511403185938232e-13
+        ]
+      },
+      "reference_temperature_keV": 4.574835777282715,
+      "level_file": "APED/cr/cr_23/cr_23_LV_v3_0_9_a.fits",
+      "level_file_sha256": "b97efa7f4125299f470ffbfedfbfade6a895b2f5095b999bebf742cc71924854",
+      "radiative_file": "APED/cr/cr_23/cr_23_LA_v3_0_7_a.fits",
+      "radiative_file_sha256": "29a46c83f5189449474b33ddd21f07c196a7df5b1f000f1b5dea9aa0850d5467",
+      "temperature_min_keV": 1.4466900825500488,
+      "temperature_max_keV": 13.657634735107422
+    },
+    "25": {
+      "calibration": {
+        "element": 25,
+        "ion": 24,
+        "ground": 1,
+        "metastable": 2,
+        "triplet_p": [
+          3,
+          4,
+          6
+        ],
+        "forbidden_rate": 129000000.0,
+        "branching": [
+          0.0,
+          0.9999866178135461,
+          0.8012755399436602
+        ],
+        "effective_branching": 0.7784819503509932,
+        "redistribution": [
+          0.4281796825585391,
+          0.571820317441461
+        ],
+        "omitted_decay_fraction": [
+          0.0,
+          0.0,
+          1.9871771911810116e-13
+        ]
+      },
+      "reference_temperature_keV": 4.845911502838135,
+      "level_file": "APED/mn/mn_24/mn_24_LV_v3_0_9_a.fits",
+      "level_file_sha256": "0393033d019e3d3dc5a56c4221125b42e721d3ace661fbc175cb5b37a8d4b889",
+      "radiative_file": "APED/mn/mn_24/mn_24_LA_v3_0_7_a.fits",
+      "radiative_file_sha256": "5bea2d94f9f79e125835a1892adeda98de3e5f54e6286b0f44634242efd30d93",
+      "temperature_min_keV": 1.8212748765945435,
+      "temperature_max_keV": 12.172379493713379
+    },
+    "26": {
+      "calibration": {
+        "element": 26,
+        "ion": 25,
+        "ground": 1,
+        "metastable": 2,
+        "triplet_p": [
+          4,
+          5,
+          6
+        ],
+        "forbidden_rate": 193000000.0,
+        "branching": [
+          0.0,
+          0.9999896506315679,
+          0.8224465125199011
+        ],
+        "effective_branching": 0.7902446127215788,
+        "redistribution": [
+          0.4218079591709338,
+          0.5781920408290663
+        ],
+        "omitted_decay_fraction": [
+          0.0,
+          0.0,
+          3.546931062401378e-13
+        ]
+      },
+      "reference_temperature_keV": 9.668865203857422,
+      "level_file": "APED/fe/fe_25/fe_25_LV_v3_0_9_a.fits",
+      "level_file_sha256": "32537505d1190651626b419864de67e95aef632bec42542733b3bc9e3857e6fe",
+      "radiative_file": "APED/fe/fe_25/fe_25_LA_v3_0_9_a.fits",
+      "radiative_file_sha256": "ddae189393f8fc85c0b669556242f82ff3703184cadd1d85e40f9eb9e0ea6550",
+      "temperature_min_keV": 1.0848644971847534,
+      "temperature_max_keV": 86.1738510131836
+    },
+    "28": {
+      "calibration": {
+        "element": 28,
+        "ion": 27,
+        "ground": 1,
+        "metastable": 2,
+        "triplet_p": [
+          4,
+          5,
+          6
+        ],
+        "forbidden_rate": 411000000.0,
+        "branching": [
+          0.0,
+          0.9999934456653344,
+          0.8535696999636829
+        ],
+        "effective_branching": 0.8075365374238241,
+        "redistribution": [
+          0.41277821599440795,
+          0.5872217840055921
+        ],
+        "omitted_decay_fraction": [
+          0.0,
+          0.0,
+          9.848775401423828e-13
+        ]
+      },
+      "reference_temperature_keV": 8.617384910583496,
+      "level_file": "APED/ni/ni_27/ni_27_LV_v3_0_9_a.fits",
+      "level_file_sha256": "47de0b05f234c5508e5bc41966267d2942d6dfe1ca3647a6af69c64b2c73301b",
+      "radiative_file": "APED/ni/ni_27/ni_27_LA_v3_0_9_a.fits",
+      "radiative_file_sha256": "aea9d23290e790d43c6200e73e43e486d6c9e4d42b4d98be4f106a9fd89664e4",
+      "temperature_min_keV": 1.8212748765945435,
+      "temperature_max_keV": 38.4924430847168
+    }
+  }
+}

@@ -228,13 +228,57 @@ def _make_edges(edges):
     return edges
 
 
+def _capture_cie_evaluation(component, model_type, parameter_vector, lo, hi,
+                            bridge, library_path):
+    """Evaluate one trial vector and capture its fresh native DEM metadata."""
+    parameter_vector = np.asarray(parameter_vector, dtype=float)
+    if (parameter_vector.ndim != 1
+            or len(parameter_vector) != len(component.pars)
+            or not np.isfinite(parameter_vector).all()):
+        raise ValueError(f"invalid trial parameters in {component.name}")
+    model_calc = getattr(component, "calc", None)
+    if model_calc is None:
+        raise TypeError(
+            f"{component.name} does not expose Sherpa's XSPEC calc method"
+        )
+    parameters = {par.name: float(value)
+                  for par, value in zip(component.pars, parameter_vector)}
+    flux = None
+
+    def evaluate():
+        nonlocal flux
+        component.cache_clear()
+        flux = np.asarray(model_calc(parameter_vector, lo, hi), dtype=float)
+        if flux.shape != lo.shape or not np.isfinite(flux).all():
+            raise ValueError(f"native evaluation returned invalid flux for {component.name}")
+        return flux
+
+    with _CAPTURE_LOCK:
+        try:
+            temperatures, weights = bridge.capture(library_path, evaluate)
+        except RuntimeError as exc:
+            if "did not publish fresh temperature weights" not in str(exc):
+                raise
+            fallback = _single_temperature(model_type, parameters)
+            if fallback is None:
+                raise RuntimeError(
+                    f"{component.name} ({model_type}) did not publish "
+                    "temperature weights and has no unambiguous "
+                    "single-temperature fallback"
+                ) from exc
+            temperatures, weights = fallback
+    if flux is None:
+        raise RuntimeError(f"native evaluation was not performed for {component.name}")
+    return flux, temperatures, weights
+
+
 def capture_plasma_model(
     model=None, *, dataset_id=None, session=None, edges=None
 ):
     """Capture each supported XSPEC CIE, NEI, or PShock component separately.
 
     Components are evaluated directly with their current Sherpa parameter
-    values. The callback invokes the component's XSPEC ``_calc`` method, and
+    values. The callback invokes the component's Sherpa ``calc`` method, and
     the bridge clears XSPEC's DEM metadata before evaluation.
 
     Parameters
@@ -319,37 +363,10 @@ def capture_plasma_model(
                 )
                 continue
 
-            model_calc = getattr(component, "calc", None)
-            if model_calc is None:
-                raise TypeError(
-                    f"{component_name} does not expose Sherpa's XSPEC calc method"
-                )
-
-            def evaluate(calc=component.calc,
-                         comp=component,
-                         pars=parameter_vector.copy(),
-                         name=component.name):
-                comp.cache_clear()
-                flux = np.asarray(calc(pars, lo, hi), dtype=float)
-                if flux.shape != lo.shape or not np.isfinite(flux).all():
-                    raise ValueError(f"native evaluation returned invalid flux for {name}")
-                return flux
-
-            try:
-                temperatures, weights = _xspec_bridge.capture(
-                    library_path, evaluate
-                )
-            except RuntimeError as exc:
-                if "did not publish fresh temperature weights" not in str(exc):
-                    raise
-                fallback = _single_temperature(model_type, parameters)
-                if fallback is None:
-                    raise RuntimeError(
-                        f"{component_name} ({model_type}) did not publish "
-                        "temperature weights and has no unambiguous "
-                        "single-temperature fallback"
-                    ) from exc
-                temperatures, weights = fallback
+            _, temperatures, weights = _capture_cie_evaluation(
+                component, model_type, parameter_vector, lo, hi,
+                _xspec_bridge, library_path,
+            )
 
             captured.append(
                 CapturedPlasmaComponent(
