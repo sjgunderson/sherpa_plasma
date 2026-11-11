@@ -150,6 +150,50 @@ def test_pumping_checks_temperature_even_at_zero_scale(parameter):
         wrapper(edges[:-1], edges[1:])
 
 
+@pytest.mark.parametrize("kind", [
+    "XSwdem", "XSvwdem", "XSvvwdem", "XSbwdem", "XSbvwdem", "XSbvvwdem",
+])
+def test_silicon_default_wdem_drops_only_negligible_tail_emission(kind):
+    _require_dem_reference()
+    from sherpa.astro import xspec
+    from sherpa_plasma import wrap_triplet_pumping
+    from sherpa_plasma._uv_coverage import _coverage_bound, _COVERAGE_TOLERANCE
+
+    xspec.set_xsabund("angr")
+    xspec.set_xsxset("APECROOT", ROOT)
+    child = getattr(xspec, kind)("si_default_" + kind)
+    child.Tmax = 1.
+    child.beta = .1
+    if kind.startswith("XSb"):
+        child.Velocity = 750.
+    wrapper = wrap_triplet_pumping(child, ["Si"])
+    edges = np.linspace(1.75, 1.9, 3001)
+    bare = child(edges[:-1], edges[1:])
+    np.testing.assert_array_equal(wrapper(edges[:-1], edges[1:]), bare)
+    wrapper.p_Si = 1.
+    pumped = wrapper(edges[:-1], edges[1:])
+    assert np.isfinite(pumped).all()
+    assert np.any(pumped != bare)
+    assert np.min(pumped) >= -1.e-18
+    np.testing.assert_allclose((pumped - bare).sum(), 0., atol=1.e-16)
+    record, grid, _ = wrapper._entries[0]
+    temperatures, weights = wrapper._child_temperatures, wrapper._child_weights
+    active = weights > 0
+    covered = ((temperatures >= record["temperature_min_keV"])
+               & (temperatures <= record["temperature_max_keV"]))
+    assert np.count_nonzero(active & ~covered) > 0
+    bound = _coverage_bound(temperatures, weights, record, grid, active, covered)
+    assert 0 < bound <= _COVERAGE_TOLERANCE
+    diagnostic, = wrapper.diagnostics()
+    assert diagnostic["temperature_count"] == np.count_nonzero(active & covered)
+    assert diagnostic["R_integrated"] == pytest.approx(diagnostic["R0_integrated"] / 2)
+    # Changing the pumping strength must reuse captured weights and profiles.
+    with patch("sherpa_plasma._uv_model._capture_cie_evaluation",
+               side_effect=AssertionError("unexpected child evaluation")):
+        wrapper.p_Si = 2.
+        assert np.isfinite(wrapper(edges[:-1], edges[1:])).all()
+
+
 def test_wdem_trial_parameters_are_used_without_mutating_child():
     _require_dem_reference()
     from sherpa.astro import xspec
@@ -1387,3 +1431,4 @@ def _compare_candidate_with_xspec(element, *, temperature_factor=None, endpoint=
         abs(base[line["observed_bin"]]) for line in lines
     )
     assert actual.sum() == pytest.approx(0., abs=rounding + 1.e-18)
+

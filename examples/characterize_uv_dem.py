@@ -114,7 +114,7 @@ def _run(args):
             or not np.isfinite(temperatures).all() or not np.isfinite(weights).all()
             or np.any(weights < 0)):
         raise ValueError("captured temperature weights are invalid")
-    active = weights != 0
+    active = weights > 0
     emissivities = np.array([
         _interpolate_native_lines(grid, temperature)[0]
         for temperature in temperatures[active]
@@ -232,3 +232,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -11,6 +11,7 @@ from sherpa_plasma.xspec_capture import (
     _NEI_TYPES,
     _PSHOCK_TYPES,
     _SUPPORTED_TYPES,
+    _capture_cie_evaluation,
     _find_components,
     _single_temperature,
     capture_plasma_model,
@@ -109,9 +110,11 @@ class XSpecCaptureModelTests(unittest.TestCase):
             "Native evaluation did not publish fresh temperature weights"
         )
 
-        bridge = SimpleNamespace(
-            capture=lambda *args: (_ for _ in ()).throw(missing_weights)
-        )
+        def capture_missing(path, evaluate):
+            evaluate()
+            raise missing_weights
+
+        bridge = SimpleNamespace(capture=capture_missing)
         with patch.dict("sys.modules", _sherpa_modules()), patch.object(
             sherpa_plasma, "_xspec_bridge", bridge, create=True
         ):
@@ -136,6 +139,29 @@ class XSpecCaptureModelTests(unittest.TestCase):
                 RuntimeError, "no unambiguous single-temperature fallback"
             ):
                 capture_plasma_model(distribution, edges=[0.1, 1., 10.])
+
+    def test_trial_evaluation_returns_flux_and_uses_trial_temperature(self):
+        component = _model_class("XSapec")()
+        component.name = "apec"
+        component.pars = [SimpleNamespace(name="kT", val=2.)]
+        calls = []
+        component.cache_clear = lambda: calls.append("clear")
+        component.calc = lambda pars, lo, hi: np.full(lo.shape, pars[0])
+
+        def capture_missing(path, evaluate):
+            calls.append("capture")
+            evaluate()
+            raise RuntimeError("Native evaluation did not publish fresh temperature weights")
+
+        flux, temperatures, weights = _capture_cie_evaluation(
+            component, "xsapec", [3.], np.array([1., 2.]), np.array([2., 3.]),
+            SimpleNamespace(capture=capture_missing), "mock.so",
+        )
+        assert_array_equal(flux, [3., 3.])
+        assert_array_equal(temperatures, [3.])
+        assert_array_equal(weights, [1.])
+        self.assertEqual(calls, ["capture", "clear"])
+        self.assertEqual(component.pars[0].val, 2.)
 
 
 if __name__ == "__main__":

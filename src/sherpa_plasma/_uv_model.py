@@ -12,6 +12,9 @@ from sherpa.astro import xspec
 from sherpa.models.model import ArithmeticModel, CompositeModel
 from sherpa.models.parameter import Parameter
 
+from ._uv_coverage import (
+    _COVERAGE_TOLERANCE, _coverage_bound, _dem_active_weights, _validated_dem_weights,
+)
 from ._uv_lines import _interpolate_native_lines, _read_native_lines
 from ._uv_projection import _unbroadened_line_bins
 from ._uv_pumping import _transfer_triplet_photons
@@ -129,94 +132,6 @@ def _installed_manifest(provider, selected, line_file, hashes):
     return manifest, tuple(files), tuple(identities)
 
 
-def _validated_dem_weights(temperatures, weights):
-    temperatures = np.asarray(temperatures, dtype=float)
-    weights = np.asarray(weights, dtype=float)
-    if (temperatures.ndim != 1 or temperatures.size == 0
-            or temperatures.shape != weights.shape
-            or not np.isfinite(temperatures).all()
-            or np.any(temperatures <= 0) or not np.isfinite(weights).all()
-            or np.any(weights < 0) or not np.any(weights > 0)):
-        raise ValueError("invalid DEM temperature weights")
-    return temperatures, weights
-
-
-#: Largest fraction of the triplet integral that may be discarded because it
-#: falls outside the complete-triplet temperature range. AtomDB tabulates the
-#: He-like triplet only where all three lines are present, so a DEM whose tails
-#: extend past that range always loses some emission. Rejecting any overhang at
-#: all would veto ordinary configurations -- an XSPEC wdem with the default
-#: beta=.1 reaches ~.1*Tmax, far below the AtomDB floor -- even when the lost
-#: emission is utterly negligible, while accepting it unconditionally would
-#: silently bias the f/(i1+i2) ratio. The budget below is the compromise.
-_COVERAGE_TOLERANCE = 1.e-4
-
-
-def _coverage_bound(temperatures, weights, record, grid, active, covered):
-    """Bound the triplet integral discarded outside complete coverage.
-
-    Returns the largest per-line fraction of the integral that dropping the
-    uncovered bins can discard. Triplet emissivities rise monotonically toward
-    the interior of the tabulated range, so evaluating each line at the nearest
-    coverage edge overestimates every uncovered bin and makes the result a true
-    upper bound on the relative error.
-    """
-    low = record["temperature_min_keV"]
-    high = record["temperature_max_keV"]
-    edges = []
-    for temperature in (low, high):
-        emissivities, _ = _interpolate_native_lines(grid, temperature)
-        edges.append(np.asarray(emissivities, dtype=float))
-    retained = np.zeros(3)
-    for temperature, weight in zip(temperatures[active & covered],
-                                   weights[active & covered]):
-        emissivities, _ = _interpolate_native_lines(grid, temperature)
-        retained += weight * np.asarray(emissivities, dtype=float)
-    discarded = np.zeros(3)
-    for temperature, weight in zip(temperatures[active & ~covered],
-                                   weights[active & ~covered]):
-        discarded += weight * (edges[0] if temperature < low else edges[1])
-    total = retained + discarded
-    fraction = np.where(total > 0, discarded / np.where(total > 0, total, 1.), 1.)
-    return float(np.max(fraction))
-
-
-def _dem_active_weights(temperatures, weights, record, grid, symbol=None,
-                        tolerance=_COVERAGE_TOLERANCE):
-    """Select the DEM bins usable for the triplet integral.
-
-    Bins outside the complete-triplet range are dropped when the emission they
-    discard is provably negligible, and reported as an error when it is not.
-    """
-    temperatures = np.asarray(temperatures, dtype=float)
-    weights = np.asarray(weights, dtype=float)
-    active = weights > 0
-    low = record["temperature_min_keV"]
-    high = record["temperature_max_keV"]
-    covered = (temperatures >= low) & (temperatures <= high)
-    usable = active & covered
-    if not np.any(active & ~covered):
-        return usable
-    label = f"{symbol} " if symbol else ""
-    if not np.any(usable):
-        outside = temperatures[active]
-        raise ValueError(
-            f"{label}temperature is outside complete triplet coverage: no DEM "
-            f"temperature falls in {low:.5f}-{high:.5f} keV (active range "
-            f"{outside.min():.5f}-{outside.max():.5f} keV)")
-    fraction = _coverage_bound(temperatures, weights, record, grid, active, covered)
-    if fraction > tolerance:
-        outside = temperatures[active & ~covered]
-        raise ValueError(
-            f"{label}temperature is outside complete triplet coverage: "
-            f"{outside.size} of {int(np.count_nonzero(active))} active DEM bins "
-            f"span {outside.min():.5f}-{outside.max():.5f} keV, outside the "
-            f"complete-triplet range {low:.5f}-{high:.5f} keV, discarding up to "
-            f"{fraction:.3%} of the triplet integral (tolerance "
-            f"{tolerance:.3%}); restrict the DEM to {low:.5f}-{high:.5f} keV")
-    return usable
-
-
 class _PumpingParameters(ArithmeticModel):
     def __init__(self, name, elements):
         parameters = []
@@ -230,7 +145,12 @@ class _PumpingParameters(ArithmeticModel):
 class _TripletPumpingModel(CompositeModel, ArithmeticModel):
     """Source-level He-like triplet pumping correction for a plasma component."""
 
-    def __init__(self, child, elements, *, name=None, atomdb=None):
+    def __init__(self, child, elements, *, name=None, atomdb=None,
+                 coverage_tolerance=_COVERAGE_TOLERANCE):
+        coverage_tolerance = float(coverage_tolerance)
+        if not np.isfinite(coverage_tolerance) or not 0 <= coverage_tolerance < 1:
+            raise ValueError("coverage_tolerance must be finite and in [0, 1)")
+        self._coverage_tolerance = coverage_tolerance
         kind = type(child)
         wdem_types = tuple(
             cls for cls in (getattr(xspec, name, None)
@@ -486,7 +406,9 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
         results = []
         for z, parameter, (record, grid, _) in zip(
                 self._selected, self._pumping.pars, self._entries):
-            active = _dem_active_weights(temperatures, weights, record, grid, _SYMBOLS[z])
+            active = _dem_active_weights(
+                temperatures, weights, record, grid, _SYMBOLS[z],
+                tolerance=self._coverage_tolerance)
             entries = []
             for temperature in temperatures[active]:
                 emissivities, _ = _interpolate_native_lines(grid, temperature)
@@ -570,8 +492,8 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
                 self._child_temperatures, self._child_weights,
             )
         else:
-            temperatures = [child_parameters[names["kt"]]]
-            weights = [1.]
+            temperatures = np.array([child_parameters[names["kt"]]], dtype=float)
+            weights = np.ones(1)
         norm = child_parameters[names["norm"]]
         redshift = child_parameters[names["redshift"]]
         if norm < 0 or redshift <= -1:
@@ -585,7 +507,9 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
                          if source[0] == "parameter" else source[1])
             if abundance < 0:
                 raise ValueError("element abundance must be nonnegative")
-            active = _dem_active_weights(temperatures, weights, record, grid, _SYMBOLS[z])
+            active = _dem_active_weights(
+                temperatures, weights, record, grid, _SYMBOLS[z],
+                tolerance=self._coverage_tolerance)
             if abundance == 0 or norm == 0:
                 continue
             calibration = record["calibration"]
@@ -620,7 +544,6 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
                             upper, record["temperature_min_keV"], record["temperature_max_keV"],
                             self._manifest["line_file_sha256"],
                             self._manifest["continuum_file_sha256"], self._data_identities[:2])
-                        active = _dem_active_weights(temperatures, weights, record, _SYMBOLS[z])
                         projected = np.asarray(_xspec_profiles.project(
                             profiles, np.concatenate((lo[:1], hi)), temperatures[active], weights[active],
                             redshift, float(child_parameters[names["velocity"]])))
@@ -640,11 +563,19 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
         return output
 
 
-def wrap_triplet_pumping(child, elements, *, name=None, atomdb=None):
+def wrap_triplet_pumping(child, elements, *, name=None, atomdb=None,
+                         coverage_tolerance=_COVERAGE_TOLERANCE):
     """Wrap a supported component with AtomDB-backed triplet suppression.
 
     ``atomdb`` may be an AtomDB connection or AtomDBTripletProvider whose
     line and continuum files match the active XSPEC APEC files. Without one,
     a bundled calibration is used when available; otherwise $ATOMDB is used.
+
+    DEM tails outside complete triplet coverage are omitted only when their
+    maximum per-line discarded-fraction bound is at most ``coverage_tolerance``
+    (default 1e-4). Set this to zero for strict nonzero-emission coverage.
     """
-    return _TripletPumpingModel(child, elements, name=name, atomdb=atomdb)
+    return _TripletPumpingModel(
+        child, elements, name=name, atomdb=atomdb,
+        coverage_tolerance=coverage_tolerance)
+

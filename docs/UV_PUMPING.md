@@ -94,14 +94,31 @@ the same abundance conventions.
 The wrapper captures the native temperature weights from the same XSPEC
 evaluation, integrates the unpumped triplet fluxes across temperature and
 applies `R_integrated = R0_integrated / (1 + p)` to those integrated fluxes.
-To diagnose a coverage failure in `XSvwdem`, run
-`python examples/diagnose_xsvwdem.py --root /path/to/apec/root` in the same
-Sherpa/XSPEC environment as the fit. The script reports captured temperature
-and weight ranges, Si calibration bounds, and the wrapper error.
-Every nonzero-weight temperature used by the wrapper must lie in each active
-ion's complete triplet coverage; use `temperature_coverage()` to see the
-interval and choose fitting bounds accordingly. Zero-weight DEM tail entries
-published by XSPEC are ignored. At zero pumping the child spectrum is unchanged. For DEM models, `diagnostics()` reports
+For each actively pumped ion, positive-weight bins inside its complete triplet
+coverage contribute to the correction. Bins outside either coverage edge are
+omitted only when the upper bound on the discarded fraction of **each individual
+line integral** is at most `1e-4`. The bound uses emissivities at the nearest
+coverage edge, after checking that they bound all finite native emissivities
+beyond that edge. Missing transitions remain missing; they are never filled or
+interpolated into the DEM. A native tail that exceeds its edge is rejected
+because this bound cannot be established.
+
+This admits the negligible Si tail at `Tmax=1`, `beta=.1` for both `XSwdem`
+and `XSvwdem`; their captured temperature distributions agree at matched
+parameters. A significant uncovered contribution still raises `ValueError`,
+reporting the offending bin count and temperature span, required interval,
+discarded-fraction bound, and tolerance. No positive-weight overlap is an
+explicit error. Zero-weight bins contribute nothing.
+
+The optional `coverage_tolerance` keyword on `wrap_triplet_pumping` sets this
+per-line budget (finite and in `[0, 1)`, default `1e-4`). Setting it to zero
+requires the bound on discarded emission to be zero. This bounds the omitted
+line integrals, not the relative error of the final ratio. Use
+`temperature_coverage()` to inspect the native interval and choose fitting
+bounds. The correction and broadened profiles use the same selected bins; the
+native child spectrum retains its full temperature distribution.
+
+At zero pumping the child spectrum is unchanged. For DEM models, `diagnostics()` reports
 `R0_integrated` and `R_integrated`, the ratios of the temperature-integrated
 triplet fluxes, and the contributing temperature range and count. It evaluates
 the current model on a fixed diagnostic energy grid to capture weights; these
@@ -162,8 +179,9 @@ string `Fe`; the latter tracks the fitted Fe abundance (or the common metal
 abundance in `XSapec`). Other values are rejected. For `XSvvapec`, use its
 individual element parameters and leave `APEC_TRACE_ABUND` unset.
 
-An actively pumped ion requires a temperature in its complete native-triplet
-coverage. `temperature_coverage()` returns the individual closed intervals in
+For a single-temperature component, an actively pumped ion requires its
+temperature in the complete native-triplet interval. DEM components use the
+bounded-tail rule above. `temperature_coverage()` returns the individual closed intervals in
 keV and their intersection for parameters currently greater than zero;
 `None` means no ions are active and an empty tuple means there is no overlap.
 The model does not change the child's temperature bounds. Set suitable bounds
@@ -219,9 +237,10 @@ astrophysical uncertainties.
 - Pumped spectra require contiguous, increasing source-energy bins. Nonuniform
   widths are supported. For unbroadened models, energies too close to a bin
   edge are rejected because exact XSPEC edge behavior is not established.
-- Nonzero pumping needs complete triplet data at the relevant temperature.
-  Out-of-coverage temperatures, unsupported settings, and unmatched datasets
-  fail explicitly instead of substituting another ion or database.
+- Nonzero pumping needs complete triplet data at the relevant temperature,
+  subject to the bounded DEM-tail omission rule above. Uncovered emission
+  exceeding that budget, unsupported settings, and unmatched datasets fail
+  explicitly instead of substituting another ion or database.
 - Treat APEC files as immutable while XSPEC is running. If they change, restart
   the Python/XSPEC process and reconstruct the wrapper. The wrapper detects
   changes after construction, but cannot determine whether XSPEC had already
@@ -249,3 +268,4 @@ filemaps and LV/LA atomic files. See the
 [XSPEC APEC manual](https://heasarc.gsfc.nasa.gov/docs/software/xspec/manual/XSmodelApec.html),
 and [Porquet et al. (2001)](https://arxiv.org/abs/astro-ph/0107329) for
 background on He-like triplet ratios and UV pumping.
+

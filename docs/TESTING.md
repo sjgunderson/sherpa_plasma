@@ -45,6 +45,24 @@ The reference tests can use either bundled 3.0.9 or 3.1.3 calibration.
 `test_triplet_installed.py` also checks an unbundled synthetic installation,
 including file matching, derived cascade branching, and DEM integration.
 
+All tests, including the uploaded UV regressions, live under `tests/`.
+`tests/test_uv_coverage.py` checks the coverage budget without Sherpa, including
+both edges, absent transitions, list inputs, no overlap, and fractions just
+below and above `1e-4`. The real-model suite also exercises `Tmax=1`, `beta=.1`,
+`p_Si=1` for all six wDEM variants, while retaining the existing sodium
+out-of-coverage rejection tests. Run the full suite in the CIAO environment
+with the optional bridges built:
+
+```bash
+SHERPA_PLASMA_UV_XSPEC_ROOT=/opt/anaconda3/envs/ciao-4.18/spectral/modelData/apec_v3.0.9 \
+HEADAS=/opt/anaconda3/envs/ciao-4.18/spectral PYTHONPATH=src \
+/opt/anaconda3/envs/ciao-4.18/bin/python -m pytest tests/ -q
+```
+
+Use the `spectral` subdirectory for `HEADAS` so XSPEC can read its abundance
+tables. Adapt these paths to the installed environment. A run without an APEC
+root skips the real UV model tests; it is not XSPEC validation.
+
 For an isolated-triplet investigation with the verified APEC files and the
 XSPEC bridge, run:
 
@@ -259,3 +277,4 @@ uses a tabulated fast profile and a configurable tail cutoff. The wDEM bridge
 uses the native APEC line projection, and independent isolated-line comparisons
 exercise its profiles and truncated energy grids. `APECMINFLUX` and
 `LINECRITLEVEL` settings are rejected; source inspection alone is not validation.
+
