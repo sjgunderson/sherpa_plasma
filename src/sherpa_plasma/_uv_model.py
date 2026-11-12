@@ -24,7 +24,7 @@ from .xspec_capture import _capture_cie_evaluation, _CAPTURE_LOCK
 
 
 _RELEVANT_XSETS = frozenset({
-    "APECROOT", "APECLOGINTERP", "APECTHERMAL", "APECVELOCITY",
+    "APECROOT", "APECLOGINTERP", "APECTHERMAL", "APECMULTITHREAD", "APECVELOCITY",
     "APECMINFLUX", "APECBROADPSEUDO", "APECNOLINES", "APECUSENEI",
     "APECEEBREMSS", "APECDOECOR", "APECUSESPEX", "APEC_TRACE_ABUND",
     "LINECRITLEVEL",
@@ -189,6 +189,14 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
             if not np.isfinite(coverage_tolerance) or not 0 <= coverage_tolerance < 1:
                 raise ValueError("coverage_tolerance must be finite and in [0, 1)")
         kind = type(child)
+        apec_types = tuple(
+            cls for cls in (getattr(xspec, name, None)
+                            for name in ("XSapec", "XSvapec", "XSvvapec",
+                                         "XSbapec", "XSbvapec", "XSbvvapec"))
+            if cls is not None
+        )
+        scalar_apec = (xspec.XSapec, getattr(xspec, "XSbapec", None))
+        full_apec = (xspec.XSvvapec, getattr(xspec, "XSbvvapec", None))
         wdem_types = tuple(
             cls for cls in (getattr(xspec, name, None)
                             for name in ("XSwdem", "XSvwdem", "XSvvwdem",
@@ -197,14 +205,15 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
         )
         broad_types = tuple(
             cls for cls in (getattr(xspec, name, None)
-                            for name in ("XSbwdem", "XSbvwdem", "XSbvvwdem"))
+                            for name in ("XSbapec", "XSbvapec", "XSbvvapec",
+                                         "XSbwdem", "XSbvwdem", "XSbvvwdem"))
             if cls is not None
         )
-        is_broadened = kind in broad_types
+        thermal_default = kind in broad_types
         is_wdem = kind in wdem_types
         is_mkcflow = kind is getattr(xspec, "XSmkcflow", None)
         is_dem = is_wdem or is_mkcflow
-        if kind not in (xspec.XSapec, xspec.XSvapec, xspec.XSvvapec) and not is_dem:
+        if kind not in apec_types and not is_dem:
             raise TypeError("triplet pumping requires a supported XSPEC APEC, wdem, or XSmkcflow component")
         if name is None:
             name = "uv_" + child.name
@@ -216,8 +225,11 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
         if not selected or len(set(selected)) != len(selected):
             raise ValueError("select at least one distinct element")
         settings = xspec.get_xsxset()
-        allowed = {"APECROOT"}
-        if kind is not xspec.XSvvapec and not is_dem:
+        # Let XSPEC resolve the thermal switch itself, including explicit "no".
+        # Even non-b models need native profiles when this override is present.
+        is_broadened = thermal_default or "APECTHERMAL" in settings
+        allowed = {"APECROOT", "APECTHERMAL", "APECMULTITHREAD"}
+        if kind not in full_apec and not is_dem:
             allowed.add("APEC_TRACE_ABUND")
         unsupported = sorted(key for key in settings
                              if key not in allowed
@@ -228,7 +240,7 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
         if trace is None:
             trace_source = ("constant", 1.)
         elif trace == "Fe":
-            trace_source = ("parameter", "abundanc" if kind is xspec.XSapec else "fe")
+            trace_source = ("parameter", "abundanc" if kind in scalar_apec else "fe")
         else:
             try:
                 trace_value = float(trace)
@@ -264,24 +276,30 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
             provider = atomdb if isinstance(atomdb, AtomDBTripletProvider) else AtomDBTripletProvider(atomdb)
             manifest, atomic_files, atomic_identities = _installed_manifest(
                 provider, selected, line_file, (file_hash, continuum_hash))
-        if is_dem:
+        if is_dem or is_broadened:
             try:
                 from sherpa.astro.xspec import _xspec
+            except ImportError as exc:
+                raise ImportError("native triplet projection requires Sherpa/XSPEC") from exc
+            self._library_path = _xspec.__file__
+        if is_dem:
+            try:
                 from . import _xspec_bridge
             except ImportError as exc:
                 raise ImportError("DEM triplet pumping requires the optional XSPEC bridge") from exc
-            self._library_path = _xspec.__file__
         if is_broadened:
             try:
                 from . import _xspec_profiles
             except ImportError as exc:
-                raise ImportError("broadened wdem requires the optional XSPEC profile bridge") from exc
-            if not hasattr(_xspec_profiles, "project_transfer"):
+                raise ImportError("thermal/broadened pumping requires the optional XSPEC profile bridge") from exc
+            if (not hasattr(_xspec_profiles, "project_transfer")
+                    or getattr(_xspec_profiles, "_profile_options_version", 0) < 1):
                 raise ImportError(
-                    "full-DEM triplet pumping requires a rebuilt XSPEC profile bridge; "
+                    "thermal/broadened pumping requires a rebuilt XSPEC profile bridge; "
                     "install with SHERPA_PLASMA_BUILD_XSPEC_BRIDGE=1")
         self._is_wdem = is_wdem
         self._is_broadened = is_broadened
+        self._thermal_default = thermal_default
         self._is_mkcflow = is_mkcflow
         self._is_dem = is_dem
         self._cosmology_at_init = tuple(xspec.get_xscosmo()) if is_mkcflow else None
@@ -315,11 +333,11 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
                 source = ("constant", 1.)
             elif is_dem:
                 source = ("parameter", "abundanc")
-            elif kind is xspec.XSvvapec:
+            elif kind in full_apec:
                 source = ("parameter", symbol.lower())
             elif symbol not in _MAIN_ELEMENTS:
                 source = trace_source
-            elif kind is xspec.XSapec:
+            elif kind in scalar_apec:
                 source = ("parameter", "abundanc")
             else:
                 source = ("parameter", symbol.lower())
@@ -426,7 +444,8 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
                 "intercombination_redistribution": tuple(c["redistribution"]),
                 "temperature_range_keV": _temperature_interval(grid),
                 "omitted_decay_fraction": tuple(c["omitted_decay_fraction"]),
-                "profile": "unbroadened XSPEC 12.14.0k",
+                "profile": ("native XSPEC 12.14.0k projection" if self._is_broadened
+                            else "unbroadened XSPEC 12.14.0k"),
             })
         return tuple(results)
 
@@ -465,7 +484,7 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
                 "atomdb_version": self._manifest["version"],
                 "line_file_sha256": self._manifest["line_file_sha256"],
                 "continuum_file_sha256": self._manifest["continuum_file_sha256"],
-                "profile": ("broadened XSPEC 12.14.0k" if self._is_broadened
+                "profile": ("native XSPEC 12.14.0k projection" if self._is_broadened
                             else "unbroadened XSPEC 12.14.0k"),
             })
         return tuple(results)
@@ -560,6 +579,8 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
                 from . import _xspec_profiles
 
                 upper = (calibration["metastable"], *calibration["triplet_p"][1:])
+                velocity = (float(child_parameters[names["velocity"]])
+                            if "velocity" in names else 0.)
                 projected = self._profile_cache.get(z)
                 if projected is None:
                     with _CAPTURE_LOCK:
@@ -571,7 +592,7 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
                             tuple(wavelengths))
                         projected = np.asarray(_xspec_profiles.project(
                             profiles, np.concatenate((lo[:1], hi)), temperatures[active], weights[active],
-                            redshift, float(child_parameters[names["velocity"]])))
+                            redshift, velocity, self._thermal_default))
                     self._check_state()
                     self._profile_cache[z] = projected
                 additions = []
@@ -593,7 +614,7 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
                                     donor = np.asarray(_xspec_profiles.project_transfer(
                                         profiles, np.concatenate((lo[:1], hi)),
                                         temperatures[active], weights[active], redshift,
-                                        float(child_parameters[names["velocity"]])))
+                                        velocity, self._thermal_default))
                                 self._check_state()
                                 self._profile_cache[(z, "donor")] = donor
                         additions.append(donor[index] / f)
@@ -626,6 +647,9 @@ def wrap_triplet_pumping(child, elements, *, name=None, atomdb=None,
 
     Any active XSPEC abundance table or custom vector is supported. Choose it
     before constructing the wrapper; changing it requires a new wrapper.
+    APECTHERMAL and APECMULTITHREAD are honored by the child and native line
+    projector. Set these before construction; changing them requires a new
+    wrapper. Native profiles are required for thermal and b-family models.
     """
     return _TripletPumpingModel(
         child, elements, name=name, atomdb=atomdb,

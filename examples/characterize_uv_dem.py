@@ -24,6 +24,8 @@ def _worker(args):
     from sherpa_plasma.xspec_capture import _capture_cie_evaluation
 
     xspec.set_xsxset("APECROOT", args.root)
+    for name, value in json.loads(args.xset).items():
+        xspec.set_xsxset(name, value)
     xspec.set_xsabund(args.abundance_table)
     if args.fixed_weights is not None:
         settings = json.loads(args.fixed_weights)
@@ -65,6 +67,7 @@ def _evaluate(root, args, fixed_weights=None):
         sys.executable, __file__, "--worker", "--root", str(root),
         "--model", args.model, "--parameters", args.parameters,
         "--abundance-table", args.abundance_table,
+        "--xset", args.xset,
         "--energy-min", str(args.energy_min), "--energy-max", str(args.energy_max),
         "--bins", str(args.bins),
     ]
@@ -117,14 +120,17 @@ def _run(args):
     active = weights > 0
     weighted_emissivities, _ = _integrate_triplet(grid, temperatures, weights)
     params = {name.lower(): value for name, value in baseline["parameters"].items()}
-    if params["switch"] != 2:
+    if params.get("switch", 2) != 2:
         raise ValueError("only switch=2 (AtomDB) can be compared with APEC line files")
     xspec.set_xsabund(args.abundance_table)
     symbol = _SYMBOLS[args.element]
     solar_scale = xspec.get_xsabundances()[symbol] / xspec.get_xsabundances("angr")[symbol]
     scalar_elements = {"C", "N", "O", "Ne", "Na", "Mg", "Al", "Si", "S",
                        "Ar", "Ca", "Fe", "Ni"}
-    if args.model in ("vwdem", "vvwdem", "bvwdem", "bvvwdem"):
+    if args.model in ("apec", "bapec"):
+        scalar_elements.remove("Na")
+    if args.model in ("vwdem", "vvwdem", "bvwdem", "bvvwdem",
+                      "vapec", "vvapec", "bvapec", "bvvapec"):
         abundance = params.get(symbol.lower(), 1.)
     else:
         abundance = params["abundanc"] if symbol in scalar_elements else 1.
@@ -194,11 +200,14 @@ def main():
     parser.add_argument("--root", required=True, help="verified APEC FITS root")
     parser.add_argument("--model", choices=("wdem", "vwdem", "vvwdem", "bwdem",
                                             "bvwdem", "bvvwdem", "mkcflow",
-                                            "coolflow"), default="wdem")
+                                            "coolflow", "apec", "vapec", "vvapec",
+                                            "bapec", "bvapec", "bvvapec"), default="wdem")
     parser.add_argument("--parameters", default='{"Tmax": 0.8, "beta": 0.5}',
                         help="JSON object of Sherpa model parameter values")
     parser.add_argument("--element", type=int, default=11)
     parser.add_argument("--abundance-table", default="angr")
+    parser.add_argument("--xset", default="{}",
+                        help="JSON object of XSPEC XSET options, e.g. APECTHERMAL/APECMULTITHREAD")
     parser.add_argument("--energy-min", type=float, default=1.)
     parser.add_argument("--energy-max", type=float, default=1.2)
     parser.add_argument("--bins", type=int, default=2000)
@@ -215,6 +224,14 @@ def main():
         parser.error(f"parameters must be a JSON object: {exc}")
     if not isinstance(parameters, dict):
         parser.error("parameters must be a JSON object")
+    try:
+        settings = json.loads(args.xset)
+    except json.JSONDecodeError as exc:
+        parser.error(f"xset must be a JSON object: {exc}")
+    if (not isinstance(settings, dict)
+            or any(not isinstance(key, str) or not isinstance(value, str)
+                   or key.upper() == "APECROOT" for key, value in settings.items())):
+        parser.error("xset must map setting names to strings; select APECROOT with --root")
     if (args.bins < 2 or not np.isfinite([args.energy_min, args.energy_max]).all()
             or args.energy_min <= 0 or args.energy_min >= args.energy_max):
         parser.error("require at least two bins and 0 < energy-min < energy-max")

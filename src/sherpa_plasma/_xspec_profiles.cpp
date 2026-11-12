@@ -38,6 +38,16 @@ struct RestoreDatabase {
     ~RestoreDatabase() { current.swap(saved); }
 };
 
+void configure(Profiles& profiles, double velocity, bool thermal_default) {
+    // These native setters also read APECTHERMAL and APECMULTITHREAD from
+    // FunctionUtility. Keep the child's defaults: b models start with thermal
+    // broadening, other models do not. Explicit XSET values override them.
+    profiles.aped.SetControlOptions(false, false, true, velocity, 0.,
+                                    false, false, false, false, "APEC");
+    profiles.aped.SetThermalBroadening(thermal_default, "APEC");
+    profiles.aped.SetMultiThread(false, "APEC");
+}
+
 void destroy_profiles(PyObject* capsule) {
     auto* p = static_cast<Profiles*>(PyCapsule_GetPointer(capsule, "xspec.profiles"));
     delete p;
@@ -224,8 +234,9 @@ PyObject* create(PyObject*, PyObject* args) {
 PyObject* project_profiles(PyObject* args, bool transfer) {
     PyObject *capsule, *edge_obj, *temp_obj, *weight_obj;
     double redshift, velocity;
-    if (!PyArg_ParseTuple(args, "OOOOdd:project", &capsule, &edge_obj, &temp_obj,
-                          &weight_obj, &redshift, &velocity)) return nullptr;
+    int thermal_default = 1; // Preserve the original broadened-only API.
+    if (!PyArg_ParseTuple(args, "OOOOdd|p:project", &capsule, &edge_obj, &temp_obj,
+                          &weight_obj, &redshift, &velocity, &thermal_default)) return nullptr;
     auto* profiles = static_cast<Profiles*>(PyCapsule_GetPointer(capsule, "xspec.profiles"));
     if (!profiles) return nullptr;
     try {
@@ -261,8 +272,7 @@ PyObject* project_profiles(PyObject* args, bool transfer) {
         IntegerVector elements(1, profiles->element);
         RealArray abundance(1., 1);
         RestoreDatabase restore_database;
-        profiles->aped.SetControlOptions(false, false, true, velocity, 0.,
-                                         false, false, false, false, "APEC");
+        configure(*profiles, velocity, thermal_default);
         std::vector<std::vector<double>> lines(3);
         for (int k = 0; k < 3; ++k) {
             for (const auto& entry : profiles->entries) {
@@ -313,6 +323,34 @@ PyObject* project_profiles(PyObject* args, bool transfer) {
 PyObject* project(PyObject*, PyObject* args) { return project_profiles(args, false); }
 PyObject* project_transfer(PyObject*, PyObject* args) { return project_profiles(args, true); }
 
+// Expose the resolved native controls for installation checks. No Python
+// interpretation of XSPEC's accepted boolean spellings is needed.
+PyObject* control_options(PyObject*, PyObject* args) {
+    PyObject* capsule;
+    double velocity = 0.;
+    int thermal_default = 1;
+    if (!PyArg_ParseTuple(args, "O|dp:_control_options", &capsule, &velocity,
+                         &thermal_default)) return nullptr;
+    auto* profiles = static_cast<Profiles*>(PyCapsule_GetPointer(capsule, "xspec.profiles"));
+    if (!profiles) return nullptr;
+    try {
+        if (!std::isfinite(velocity) || velocity < 0)
+            throw std::invalid_argument("velocity must be finite and nonnegative");
+        RestoreDatabase restore_database;
+        configure(*profiles, velocity, thermal_default);
+        return Py_BuildValue("(iid)", static_cast<int>(profiles->aped.m_thermalBroadening),
+                             static_cast<int>(profiles->aped.m_multiThread),
+                             static_cast<double>(profiles->aped.m_velocityBroadening));
+    } catch (const YellowAlert&) {
+        PyErr_SetString(PyExc_RuntimeError, "XSPEC failed while resolving APEC options");
+    } catch (const RedAlert&) {
+        PyErr_SetString(PyExc_RuntimeError, "XSPEC reported a fatal error resolving APEC options");
+    } catch (const std::exception& e) {
+        if (!PyErr_Occurred()) PyErr_SetString(PyExc_RuntimeError, e.what());
+    }
+    return nullptr;
+}
+
 PyObject* snapshot_db(PyObject*, PyObject*) {
     PyObject* result = PyDict_New();
     if (!result) return nullptr;
@@ -330,11 +368,19 @@ PyMethodDef methods[] = {
     {"create", create, METH_VARARGS, "Load isolated APEC triplet profiles."},
     {"project", project, METH_VARARGS, "Project the isolated triplet with XSPEC."},
     {"project_transfer", project_transfer, METH_VARARGS, "Project forbidden-donor profiles at each triplet energy."},
+    {"_control_options", control_options, METH_VARARGS, "Read resolved native thermal, threading, and velocity controls."},
     {"_snapshot_db", snapshot_db, METH_NOARGS, "Read XSPEC diagnostic values."},
     {nullptr, nullptr, 0, nullptr}
 };
 PyModuleDef module = {PyModuleDef_HEAD_INIT, "_xspec_profiles", nullptr, -1, methods};
 }
 
-PyMODINIT_FUNC PyInit__xspec_profiles() { return PyModule_Create(&module); }
+PyMODINIT_FUNC PyInit__xspec_profiles() {
+    PyObject* result = PyModule_Create(&module);
+    if (result && PyModule_AddIntConstant(result, "_profile_options_version", 1) < 0) {
+        Py_DECREF(result);
+        return nullptr;
+    }
+    return result;
+}
 

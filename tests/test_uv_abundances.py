@@ -79,21 +79,25 @@ def test_named_table_state_check_does_not_read_thirty_values(
     assert uv_module._state()[1] == "lodd"
 
 
-@pytest.mark.parametrize("kind", ["XSapec", "XSvapec", "XSvvapec", "XSwdem", "XSvwdem",
+@pytest.mark.parametrize("kind", ["XSapec", "XSvapec", "XSvvapec", "XSbapec", "XSbvapec", "XSbvvapec", "XSwdem", "XSvwdem",
                                   "XSvvwdem", "XSbwdem", "XSbvwdem", "XSbvvwdem", "XSmkcflow"])
 @pytest.mark.parametrize("table", ["lodd", "file"])
+@pytest.mark.parametrize("options", [{}, {"APECTHERMAL": "yes", "APECMULTITHREAD": "yes"}])
 def test_all_wrapper_families_construct_with_other_tables(
-        uv_module, composition, monkeypatch, tmp_path, kind, table):
+        uv_module, composition, monkeypatch, tmp_path, kind, table, options):
     state, _ = composition
     state["table"] = table
-    for name in ("XSapec", "XSvapec", "XSvvapec", "XSwdem", "XSvwdem", "XSvvwdem",
+    settings = dict(options)
+    monkeypatch.setattr(uv_module.xspec, "get_xsxset", lambda: settings.copy())
+    for name in ("XSapec", "XSvapec", "XSvvapec", "XSbapec", "XSbvapec", "XSbvvapec", "XSwdem", "XSvwdem", "XSvvwdem",
                  "XSbwdem", "XSbvwdem", "XSbvvwdem", "XSmkcflow"):
         monkeypatch.setattr(uv_module.xspec, name, type(name, (), {}), raising=False)
     monkeypatch.setattr(uv_module.xspec, "_xspec", SimpleNamespace(__file__="controlled.so"),
                         raising=False)
     monkeypatch.setattr(uv_module.xspec, "get_xscosmo", lambda: (70., 0., .73), raising=False)
     monkeypatch.setattr(sherpa_plasma, "_xspec_profiles",
-                        SimpleNamespace(project_transfer=lambda *args: None), raising=False)
+                        SimpleNamespace(project_transfer=lambda *args: None,
+                                        _profile_options_version=1), raising=False)
     class Parameter:
         def __init__(self, model, name, value, **kwargs):
             self.name, self.val = name, value
@@ -134,6 +138,17 @@ def test_all_wrapper_families_construct_with_other_tables(
     edges = np.array([1., 1.2, 1.5, 1.8])
     actual = wrapper.calc([par.val for par in wrapper.pars], edges[:-1], edges[1:])
     np.testing.assert_array_equal(actual, np.full(3, 2.5))
+    for key in ("APECTHERMAL", "APECMULTITHREAD"):
+        settings[key] = "no" if options else "yes"
+        with pytest.raises(RuntimeError, match="settings or abundances changed"):
+            wrapper.calc([par.val for par in wrapper.pars], edges[:-1], edges[1:])
+        settings.clear()
+        settings.update(options)
+    # A stale compiled bridge must report the rebuild requirement clearly.
+    if wrapper._is_broadened:
+        monkeypatch.delattr(sherpa_plasma._xspec_profiles, "_profile_options_version")
+        with pytest.raises(ImportError, match="rebuilt XSPEC profile bridge"):
+            uv_module.wrap_triplet_pumping(child, ["Si"])
 
 
 @pytest.mark.parametrize("scale", [0., .25, 2.5])

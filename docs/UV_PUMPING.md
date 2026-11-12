@@ -1,7 +1,8 @@
 # UV pumping of He-like triplets
 
 `wrap_triplet_pumping` adds an AtomDB-backed source-level correction to an existing Sherpa
-`XSapec`, `XSvapec`, or `XSvvapec` component, with limited experimental
+`XSapec`, `XSvapec`, `XSvvapec`, `XSbapec`, `XSbvapec`, or `XSbvvapec`
+component, with limited experimental
 `XSwdem`, `XSvwdem`, `XSvvwdem`, their broadened counterparts, and
 `XSmkcflow` support described below. It removes photons from the He-like forbidden line and
 adds them to the two intercombination lines. The child model and its parameter
@@ -17,9 +18,10 @@ by the SHA256 hashes of the AtomDB 3.0.9 and 3.1.3 reference files. For other
 installations, the wrapper derives the triplet calibration from a matching
 local AtomDB filemap and its LV/LA atomic files; see the example below. The
 wrapper accepts any abundance table selected in XSPEC, including built-in
-tables and custom files or vectors. Apart from the trace-abundance settings
-described below, other APEC XSET options, including broadening and
-alternate interpolation settings, and the `LINECRITLEVEL` XSET are rejected.
+tables and custom files or vectors. The supported APEC XSETs are `APECROOT`,
+`APECTHERMAL`, `APECMULTITHREAD`, and the trace-abundance settings described
+below. Other options, including alternate interpolation, `APECVELOCITY`,
+`APECMINFLUX`, and `LINECRITLEVEL`, are rejected.
 Install the package into the same environment as Sherpa:
 
 ```python
@@ -70,6 +72,53 @@ wrapper returns the unmodified child spectrum. Choose other ions by symbol or
 atomic number, for example `wrap_triplet_pumping(plasma, ["O", "Ne", "Na"])`.
 Each selected ion has its own `p_<symbol>` parameter.
 
+### Thermal broadening and native threading
+
+Set the options before constructing the model wrapper:
+
+```python
+xspec.set_xsxset("APECTHERMAL", "yes")
+xspec.set_xsxset("APECMULTITHREAD", "yes")
+plasma = xspec.XSbvvapec("plasma")
+plasma.kT = 1.0
+plasma.Velocity = 300.0  # Gaussian velocity sigma in km/s
+pumped = wrap_triplet_pumping(plasma, ["Si"])
+pumped.p_Si = 1.0
+```
+
+`APECTHERMAL` follows XSPEC's behavior: thermal widths depend on the ion's
+atomic mass and the native temperature record and add in Gaussian quadrature
+with the component's velocity width. It also works for non-b models, including
+APEC, wDEM, and `XSmkcflow`. When the setting is absent, b-family models keep
+their native thermal default; other models keep their unbroadened default.
+An explicit `no` disables the thermal contribution while retaining any fitted
+velocity width.
+
+Thermal and b-family corrections use the optional XSPEC profile bridge,
+including when `APECTHERMAL` is explicitly set to `no`. Rebuild the bridges
+after updating and start a fresh Python process:
+
+```bash
+SHERPA_PLASMA_BUILD_XSPEC_BRIDGE=1 python -m pip install -e .
+```
+
+`APECMULTITHREAD` enables XSPEC's own parallel line calculation across native
+temperature records for both the child spectrum and native correction
+profiles. The wrapper keeps XSPEC calls serialized while XSPEC runs its
+internal workers; it does not start concurrent Python model evaluations.
+The flag can help with expensive broadened DEM models, but thread overhead
+can outweigh the benefit for small models. No speedup is guaranteed.
+
+The integrated ratio law is unchanged. The correction scales each transition
+by its integrated transfer coefficient. Line projection is linear, so applying
+those coefficients to cached native profiles is equivalent to scaling the
+corresponding line emissivities before broadening. This preserves fast
+pumping-only fit steps without rerunning native projection. A branch with no
+intrinsic emission uses forbidden-donor emissivities at the recipient's energy
+before projection, with broadening at the donor's native temperatures.
+Profiles clipped by the energy grid are not renormalized. Changing either
+XSET after construction requires reconstructing the wrapper.
+
 ### Abundance tables
 
 Select the composition before constructing the wrapper. For example,
@@ -104,15 +153,16 @@ The supported ions for the bundled reference datasets are C V, N VI, O VII,
 Ne IX, Na X, Mg XI, Al XII, Si XIII, P XIV, S XV, Cl XVI, Ar XVII, K XVIII,
 Ca XIX, Ti XXI, Cr XXIII, Mn XXIV, Fe XXV, and Ni XXVII. Other ions are
 rejected for those datasets. For other installations, availability is
-determined from the selected ion's LV/LA data and transition identities. Broadened APEC variants and arbitrary plasma models are not supported.
+determined from the selected ion's LV/LA data and transition identities.
+Arbitrary plasma models are not supported.
 
 ### Experimental wDEM support
 
 `wrap_triplet_pumping` also accepts `XSwdem`, `XSvwdem`, `XSvvwdem`,
 `XSbwdem`, `XSbvwdem`, and `XSbvvwdem` components under a
 strict experimental configuration: available ions from the active AtomDB
-installation, any active XSPEC abundance table, `switch=2`, `nH=1`, and no APEC
-XSETs other than `APECROOT`. The optional XSPEC bridge must be built as
+installation, any active XSPEC abundance table, `switch=2`, `nH=1`, and only
+the `APECROOT`, `APECTHERMAL`, and `APECMULTITHREAD` XSETs. The optional XSPEC bridge must be built as
 described in [TESTING.md](TESTING.md). The component's scalar metal abundance
 also scales sodium, unlike the default trace-element treatment in `XSapec`.
 Other trace elements not exposed by `XSwdem` retain solar abundance.
@@ -169,8 +219,8 @@ that it uses the same XSPEC library as Sherpa. When photons are transferred,
 an intercombination branch with zero integrated flux is populated using the
 forbidden donor's temperature distribution at that branch's energy. Existing
 nonzero branches retain their own normalized native profiles. Rebuild the
-optional profile bridge after updating this code: the new `project_transfer`
-entry point is required for full-DEM broadened support. Initializing a
+optional profile bridge after updating this code: the updated thermal-default
+argument is required for thermal and broadened support. Initializing a
 new ion loads native APEC data, which can be expensive; up to four native
 ion contexts are cached. At the final native temperature-grid endpoint,
 the bridge uses the immediately lower representable temperature to avoid an
@@ -187,9 +237,10 @@ captures temperature weights.
 
 ### Experimental XSmkcflow support
 
-The wrapper also accepts unbroadened `XSmkcflow` for the available ions, with
+The wrapper also accepts `XSmkcflow` for the available ions, with
 the active AtomDB files, any active XSPEC abundance table, `switch=2`, positive
-redshift, and no APEC XSETs other than `APECROOT`. It requires the optional
+redshift, and only the `APECROOT`, `APECTHERMAL`, and `APECMULTITHREAD` XSETs.
+Thermal broadening uses the native profile bridge. It requires the optional
 XSPEC bridge and the same full-DEM integration and concurrency precautions
 as `XSwdem`. The wrapper detects XSPEC cosmology changes and must be
 reconstructed afterward.
@@ -204,14 +255,16 @@ summed with those fixed weights; each unmodified weighted APEC spectrum was
 also checked against the native cooling-flow spectrum. Removing a line directly
 from the cooling-flow database would change its cooling function and is not
 an equivalent reference. This does not validate other
-cooling-flow variants, or broadened profiles.
+cooling-flow variants. New thermal and threaded comparisons are described in
+[TESTING.md](TESTING.md).
 
-For `XSapec`, the fitted metal abundance applies to the main elements; for
-`XSvapec`, their individual abundances apply. For trace elements not exposed
+For `XSapec` and `XSbapec`, the fitted metal abundance applies to the main
+elements; for `XSvapec` and `XSbvapec`, their individual abundances apply. For trace elements not exposed
 by those models, the default abundance is 1 relative to solar. The supported
 `APEC_TRACE_ABUND` settings are a nonnegative numeric value or the exact
 string `Fe`; the latter tracks the fitted Fe abundance (or the common metal
-abundance in `XSapec`). Other values are rejected. For `XSvvapec`, use its
+abundance in `XSapec`/`XSbapec`). Other values are rejected. For `XSvvapec` and
+`XSbvvapec`, use their
 individual element parameters and leave `APEC_TRACE_ABUND` unset.
 
 Single-temperature components use the same full-grid rule. `temperature_coverage()`
@@ -291,7 +344,6 @@ astrophysical uncertainties.
 - Sherpa's binary `save`/`restore` round-trip has been tested in the same
   environment. `save_all` writes a text script but does not reconstruct this
   custom wrapper; recreate it with `wrap_triplet_pumping` when using that script.
-- Broadened APEC variants such as `XSbvvapec` are not currently supported.
 
 See [TESTING.md](TESTING.md) for reproducible isolated-line comparisons and
 benchmarks. The validation checks the supported reference files against

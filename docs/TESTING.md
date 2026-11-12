@@ -74,6 +74,23 @@ supported wrapper families, zero abundances, numerical custom-vector changes,
 and rebuilding with a cached child. Compiled bridge tests check that native
 solar scaling is applied once, including the donor profile for an empty branch.
 These use controlled interfaces and do not establish real XSPEC compatibility.
+The compiled bridge tests also exercise `APECTHERMAL` overrides, native-temperature
+thermal widths, serial/threaded agreement, and projection linearity with a
+controlled Gaussian implementation and actual C++ worker threads. Wrapper tests
+cover the two XSETs for all supported families, cache reuse, option-change
+invalidation, and stale-bridge rebuild errors.
+`tests/test_uv_xsets_real.py` adds independent isolated-line comparisons for
+thermal APEC, broadened APEC, wDEM, and fixed-weight `mkcflow` references with
+the new options. It also compares native serial and multithreaded spectra and
+checks the resolved XSPEC controls and diagnostic restoration. These new
+scientific-backend comparisons require Sherpa/XSPEC and both rebuilt bridges;
+they were not run in the development workspace, which lacks those backends.
+
+```bash
+SHERPA_PLASMA_UV_XSPEC_ROOT=/absolute/path/to/apec_v3.0.9 \
+python -m pytest tests/test_uv_xsets_real.py -q
+```
+
 The real abundance regressions cover the built-in tables and a custom file for
 single-temperature APEC, isolated line profiles for `wdem`, `bvwdem`, and
 `mkcflow` under `lodd` and a custom table, and custom-vector reload detection.
@@ -288,8 +305,9 @@ An exploratory Na X `XSbvvapec` test with velocity sigma 1000 km/s found a
 maximum per-bin discrepancy of about `9.77e-6` of the total isolated-line
 flux when compared with a velocity-only analytic Gaussian. A zero-velocity
 `XSbvvapec` reference was also not deposited in a single bin. Neither
-observation establishes an exact broadening profile. Broadened APEC variants
-remain unsupported; broadened wDEM variants use native XSPEC projection instead.
+observation establishes an exact broadening profile. Thermal and broadened
+APEC/wDEM corrections now use native XSPEC projection. The newly supported
+APEC variants and XSET combinations require the native regressions above.
 
 To measure the zero-velocity `XSbvvapec` lines without assuming a profile:
 

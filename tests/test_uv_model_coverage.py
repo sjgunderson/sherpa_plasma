@@ -39,6 +39,7 @@ def make_wrapper(module, *, dem=False, broadened=False, temperature=1., norm=1.e
     wrapper._check_state = lambda: None
     wrapper._validate_dem_trial = lambda trial: None
     wrapper._is_dem, wrapper._is_broadened = dem, broadened
+    wrapper._thermal_default = broadened
     wrapper._child_count = 4
     wrapper.pars = [SimpleNamespace(val=value) for value in (temperature, norm, 0., 0., 1.)]
     wrapper._indices = {"kt": 0, "norm": 1, "redshift": 2, "velocity": 3}
@@ -95,7 +96,7 @@ def test_dem_integration_and_profiles_share_selection_and_cache(uv_module, monke
         captures.append(trial.copy())
         return np.full(lo.shape, 10.), np.array([.1, 1., 3.]), np.ones(3)
 
-    def project(profiles, edges, temperatures, weights, redshift, velocity):
+    def project(profiles, edges, temperatures, weights, redshift, velocity, thermal_default):
         projections.append((temperatures.copy(), weights.copy()))
         return np.diag([7., 3., 1.]) * 1.e14
 
@@ -166,6 +167,34 @@ def test_broadened_transfer_can_populate_an_absent_branch(uv_module, monkeypatch
     np.testing.assert_array_equal(donors[0][2], [.1, 1., 3.])
     evaluate(wrapper, pumping=2.)
     assert len(donors) == 1
+
+
+@pytest.mark.parametrize("dem,thermal_default", [(False, False), (False, True),
+                                                (True, False), (True, True)])
+def test_native_projection_passes_the_childs_thermal_default(
+        uv_module, monkeypatch, dem, thermal_default):
+    wrapper = make_wrapper(uv_module, dem=dem, broadened=True)
+    wrapper._thermal_default = thermal_default
+    if not thermal_default:
+        del wrapper._indices["velocity"]  # APECTHERMAL on a non-b component.
+    wrapper._entries[0][1].emissivities[:, 2] = 0.
+    monkeypatch.setattr(uv_module, "_capture_cie_evaluation", lambda *args: (
+        np.full(3, 10.), np.array([1.]), np.ones(1)))
+    monkeypatch.setattr(uv_module, "_load_broad_profiles", lambda *args: "profiles")
+    monkeypatch.setattr(uv_module, "_root", lambda: Path("unused"))
+    calls = []
+    def project(*args):
+        calls.append(args[-2:])
+        return np.diag([4., 2., 0.]) * 1.e14
+    def donor(*args):
+        calls.append(args[-2:])
+        return np.diag([4., 4., 4.]) * 1.e14
+    monkeypatch.setattr(sherpa_plasma, "_xspec_profiles", SimpleNamespace(
+        project=project, project_transfer=donor), raising=False)
+    np.testing.assert_allclose(evaluate(wrapper), 10. + np.array([-1., .75, .25]))
+    assert calls == [(0., thermal_default), (0., thermal_default)]
+    evaluate(wrapper, pumping=2.)
+    assert len(calls) == 2
 
 
 @pytest.mark.parametrize("tolerance", [-1., 1., float("inf"), float("nan")])
