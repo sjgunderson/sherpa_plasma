@@ -171,6 +171,15 @@ Keep the `AtomDB` connection open while the Sherpa model is in use, and close
 it after fitting (`db.close()`). Sherpa's ordinary source-model parameters
 include `norm`, `logTmin`, `logTmax`, and the custom DEM parameters.
 
+`abundset` accepts the same [baseline compositions](PLASMA.md#abundance-compositions)
+as line queries, including any XSPEC table name, a numerical mapping or vector,
+and a custom file. `abundances` supplies fixed element multipliers relative to
+that baseline. The model copies its baseline and multipliers at construction
+(inheriting `db.abundset` when omitted). Later changes to the database default,
+XSPEC settings, or the original input mapping do not alter cached spectra.
+Construct a new model to use a different fixed composition. For
+`CompiledCIEModel`, abundance physics is defined by the user-supplied kernel.
+
 ### Supply a custom native DEM
 
 For a DEM shape other than the built-in power law, write a C or C++ function
@@ -222,3 +231,4 @@ the model. The packaged header directory is added to the compiler include path.
 Compile only native code from sources you trust. For users who need to define
 the entire spectrum rather than just its temperature distribution, use
 `CompiledCIEModel` instead.
+

@@ -5,6 +5,7 @@ is used. Atomic searches need a filemap and LA/LV files; emissivities also need
 the APEC line and continuum emissivity files. See PLASMA.md for conventions.
 """
 from contextlib import contextmanager
+from collections.abc import Mapping
 from dataclasses import dataclass
 import importlib
 from numbers import Integral
@@ -18,6 +19,7 @@ from threading import RLock
 import numpy as np
 
 from .units import HC_KEV_ANGSTROM, convert_bins
+from ._abundances import _abundance_values, _resolve_abundance_spec, _xspec_abundance_values
 
 _LOCK = RLock()  # PyAtomDB uses process-wide environment variables.
 _SYMBOLS = ("", "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne",
@@ -27,15 +29,6 @@ _LINE_DTYPE = np.dtype([
     ("Element", "i4"), ("Ion", "i4"), ("UpperLev", "i4"), ("LowerLev", "i4"),
     ("Lambda", "f8"), ("Energy", "f8"), ("Epsilon", "f8"),
     ("ModelContribution", "f8"), ("Einstein_A", "f8")])
-_XSPEC_ABUNDANCE_SETS = {
-    "angr": "AG89",
-    "aspl": "Asplund09",
-    "feld": "Feldman",
-    "aneb": "AE82",
-    "grsa": "GS98",
-    "wilm": "Wilm00",
-    "lodd": "Lodd03",
-}
 _SYMBOL_TO_Z = {symbol.lower(): z for z, symbol in enumerate(_SYMBOLS) if symbol}
 
 
@@ -184,16 +177,6 @@ def _line_ids(lines):
     return tuple(row if isinstance(row, LineID) else LineID.from_row(row) for row in lines)
 
 
-def _xspec_abundance_set(table):
-    if not isinstance(table, str) or not table.strip():
-        raise ValueError("captured component has no XSPEC abundance table")
-    key = table.split(":", 1)[0].strip().lower()
-    try:
-        return _XSPEC_ABUNDANCE_SETS[key]
-    except KeyError:
-        raise ValueError(f"unsupported XSPEC abundance table {table!r}") from None
-
-
 def _component_abundances(component, *, allow_missing=False):
     """Return AtomDB multipliers and elements with zero effective abundance."""
     parameters = {}
@@ -254,7 +237,9 @@ class AtomDB:
     ``root`` defaults to $ATOMDB. File names may be absolute or relative
     to root; versioned names work without changing global symlinks.
     ``abundset=None`` retains the emissivity files' native abundance set.
-    Alternate sets require the local ABUND file referenced by filemap.
+    ``abundset`` also accepts XSPEC table names, local AtomDB names, numerical
+    H-through-Zn compositions, and files containing 30 linear abundances.
+    XSPEC names are resolved numerically without changing global settings.
     The connection is serialized and may be used as a context manager.
     Emissivity tables load lazily and remain open until close().
     This interface does not construct or evaluate fitting components.
@@ -274,7 +259,8 @@ class AtomDB:
             self._path(name) for name in (linefile, cocofile, filemap))
         self.nei_linefile, self.nei_cocofile = (
             self._path(name) for name in (nei_linefile, nei_cocofile))
-        self.abundset = abundset
+        self.abundset = (_abundance_values(abundset) if abundset is not None
+                         and not isinstance(abundset, (str, Path)) else abundset)
         self._api = None
         self._session = None
         self._nei_sessions = {}
@@ -513,14 +499,73 @@ class AtomDB:
             )
         return session
 
+    def _native_abundance_values(self, session):
+        cached = getattr(session, "_sherpa_plasma_native_abundances", None)
+        if cached is not None:
+            return cached
+        try:
+            self._get_data(False, False, "ABUND", datacache=session.datacache)
+        except FileNotFoundError:
+            # Standard APEC files use AG89. XSPEC can supply that numerical
+            # reference when an installation has only the emissivity files.
+            if session.default_abundset.strip().upper() != "AG89":
+                raise
+            values = _xspec_abundance_values("angr")
+        else:
+            with self._using() as api:
+                values = api.atomdb.get_abundance(
+                    abundset=session.default_abundset, datacache=session.datacache,
+                    settings={"filemap": str(self.filemap), "FileMap": str(self.filemap),
+                              "atomdbroot": str(self.root)})
+            if not isinstance(values, Mapping):
+                raise ValueError(
+                    f"native abundance reference absent from local ABUND file: "
+                    f"{session.default_abundset}")
+            values = _abundance_values(values)
+        session._sherpa_plasma_native_abundances = values
+        return values
+
     def _set_abundset(self, session, abundset):
-        if abundset == session.abundset:
+        resolved = _resolve_abundance_spec(abundset)
+        if isinstance(resolved, Mapping):
+            reference = self._native_abundance_values(session)
+            vector = np.zeros_like(session.abundsetvector, dtype=float)
+            for z in session.elements:
+                symbol = _SYMBOLS[int(z)]
+                baseline, value = reference[symbol], resolved[symbol]
+                if baseline == 0 and value > 0:
+                    raise ValueError(f"native emissivity table has zero reference abundance for {symbol}")
+                vector[z] = value / baseline if baseline > 0 else 0.
+            if not np.isfinite(vector).all():
+                raise ValueError("abundance conversion is not finite")
+            session.abundsetvector[:] = vector
+            session.abundset = "custom"
+            session._sherpa_plasma_abundance_values = dict(resolved)
+            return
+        native = resolved == "native"
+        if resolved.startswith("atomdb:"):
+            resolved = resolved.split(":", 1)[1]
+        if native or resolved == session.default_abundset:
+            session.abundsetvector[:] = 0.
+            session.abundsetvector[session.elements] = 1.
+            session.abundset = session.default_abundset
+            session._sherpa_plasma_abundance_values = None
+            return
+        if (resolved == session.abundset
+                and getattr(session, "_sherpa_plasma_abundance_values", None) is None):
             return
         data = self._get_data(False, False, "ABUND", datacache=session.datacache)
-        if abundset not in data[1].data["Source"]:
-            raise ValueError(f"abundance set absent from local ABUND file: {abundset}")
+        names = [(name.decode() if isinstance(name, bytes) else str(name)).strip()
+                 for name in data[1].data["Source"]]
+        matched = [name for name in names if name.lower() == resolved.lower()]
+        if len(matched) != 1:
+            raise ValueError(
+                f"abundance set absent from local ABUND file: {resolved}; "
+                "use an XSPEC table name in a Sherpa/XSPEC environment, numerical "
+                "abundances, or a 30-value abundance file")
         with self._using():
-            session.set_abundset(abundset)
+            session.set_abundset(matched[0])
+        session._sherpa_plasma_abundance_values = None
 
     def _check_temperature(self, kT):
         s = self._cie()
@@ -541,8 +586,6 @@ class AtomDB:
 
     def _configure_session(self, session, abundances, *, abundset=None):
         abundset = self.abundset if abundset is None else abundset
-        if abundset is None:
-            abundset = session.default_abundset
         self._set_abundset(session, abundset)
         session.set_abund(session.elements, 1.0)
         if abundances is not None:
@@ -587,11 +630,15 @@ class AtomDB:
                   "nei_cocofile": str(self.nei_cocofile.resolve()),
                   "filemap": str(self.filemap.resolve()),
                   "version": version.read_text().strip() if version.is_file() else None,
-                  "abundset": self.abundset}
+                  "abundset": (dict(self.abundset) if isinstance(self.abundset, Mapping)
+                               else self.abundset)}
         if self._session is not None:
             result["abundset"] = self._session.abundset
             result["line_checksum"] = self._session.linedata[0].header.get("CHECKSUM")
             result["continuum_checksum"] = self._session.cocodata[0].header.get("CHECKSUM")
+            values = getattr(self._session, "_sherpa_plasma_abundance_values", None)
+            if values is not None:
+                result["abundance_values"] = dict(values)
         return result
 
     def levels(self, element, ion):
@@ -993,11 +1040,13 @@ class AtomDB:
         contribution across components; all discovered lines are returned by
         default.
 
-        Captured XSPEC abundance-table names are mapped to corresponding local
-        AtomDB sets before applying model abundance parameters. Unsupported
-        tables or tables absent locally raise ValueError. Returned contributions
-        are emissivity contributions, not absolute line fluxes. Additional
-        XSPEC XSET abundance overrides are not interpreted.
+        Captured numerical abundance compositions are applied relative to the
+        emissivity tables' native reference before model abundance multipliers.
+        Any XSPEC table, including custom tables, is supported without a local
+        copy of the target table. Legacy named captures require XSPEC lookup;
+        legacy custom captures require recapture or explicit abundance_values.
+        Returned contributions are emissivity contributions, not absolute line
+        fluxes. Additional XSPEC XSET abundance overrides are not interpreted.
         """
         from .xspec_capture import (
             CapturedPlasmaComponent, _NEI_INITIAL_POPULATIONS, _NEI_TYPES,
@@ -1031,12 +1080,17 @@ class AtomDB:
         settings = []
         discovered = {}
         for component in components:
-            abundset = _xspec_abundance_set(component.abundance_table)
+            abundset = (dict(component.abundance_values)
+                        if component.abundance_values is not None else
+                        _resolve_abundance_spec(component.abundance_table, xspec=True))
+            baseline_suppressed = ({_element(symbol) for symbol, value in abundset.items()
+                                    if value == 0} if isinstance(abundset, Mapping) else set())
             model_type = component.model_type.lower()
             if model_type in _NEI_TYPES or model_type in _PSHOCK_TYPES:
                 abundances, suppressed = _component_abundances(
                     component, allow_missing=True
                 )
+                suppressed |= baseline_suppressed
                 parameters = {
                     str(name).lower(): float(value)
                     for name, value in component.parameters.items()
@@ -1086,6 +1140,7 @@ class AtomDB:
                         discovered[line] = copy
             elif component.temperatures is not None:
                 abundances, suppressed = _component_abundances(component)
+                suppressed |= baseline_suppressed
                 settings.append((abundset, abundances, "cie", None))
                 for temperature in component.temperatures:
                     rows = self.find_lines(
@@ -1216,3 +1271,4 @@ class AtomDB:
 
     def __exit__(self, *args):
         self.close()
+

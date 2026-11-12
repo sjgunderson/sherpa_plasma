@@ -20,6 +20,7 @@ from .cie_model import (
     _float64_vector,
 )
 from .plasma import AtomDB, _positive
+from ._abundances import _resolve_abundance_spec
 
 if _SHERPA_IMPORT_ERROR is None:
     from sherpa.models.model import ArithmeticModel
@@ -238,6 +239,9 @@ class AtomDBDEMModel(ArithmeticModel):
     bounds are fitted in ``log10(K)``. PyAtomDB prepares single-temperature
     spectra once per Sherpa energy grid; all repeated interpolation, DEM
     evaluation, normalization, and integration are performed in native C++.
+    ``abundset`` accepts the same compositions as AtomDB queries. The baseline
+    and fixed element multipliers are copied at construction so cached spectra
+    retain their composition across later database or XSPEC setting changes.
 
     Provide ``dem_source`` or ``dem_library`` to define a different native
     DEM shape. The native function returns a nonnegative shape; this model
@@ -311,7 +315,8 @@ class AtomDBDEMModel(ArithmeticModel):
 
         self._atomdb = atomdb
         self._abundances = dict(abundances or {})
-        self._abundset = abundset
+        self._abundset = _resolve_abundance_spec(
+            atomdb.abundset if abundset is None else abundset)
         self._quadrature_points = int(quadrature_points)
         self._table_cache = OrderedDict()
         self._mineps_offset = 1.e-40
@@ -472,3 +477,4 @@ class AtomDBDEMModel(ArithmeticModel):
     def clear_cache(self):
         """Discard prepared spectra so the next evaluation rereads the response grid."""
         self._table_cache.clear()
+

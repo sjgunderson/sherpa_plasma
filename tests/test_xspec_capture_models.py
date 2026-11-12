@@ -30,6 +30,7 @@ def _sherpa_modules():
     xspec = ModuleType("sherpa.astro.xspec")
     xspec._xspec = SimpleNamespace(__file__="mock-xspec.so")
     xspec.get_xsabund = lambda: "angr"
+    xspec.get_xsabundances = lambda table=None: {"O": .001, "H": 1., "He": .1}
     xspec.get_xsxset = lambda: {}
     astro.xspec = xspec
     return {
@@ -166,3 +167,4 @@ class XSpecCaptureModelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -8,6 +8,7 @@ from collections.abc import Mapping
 import math
 
 from .plasma import _SYMBOLS
+from ._abundances import _abundance_values, _xspec_abundance_values
 
 _APEC_TYPES = frozenset(("xsapec", "xsbapec", "xsvapec", "xsbvapec",
                          "xsvvapec", "xsbvvapec"))
@@ -17,9 +18,10 @@ _APEC_TYPES = frozenset(("xsapec", "xsbapec", "xsvapec", "xsbvapec",
 class PlasmaState:
     """Detached parameter snapshot; temperature is keV, velocity is km/s.
 
-    ``parameters`` preserves the component's own parameter names. Abundances
-    remain relative to XSPEC's abundance table; they are not converted to the
-    local AtomDB abundance set. Compound-expression scale factors and
+    ``parameters`` preserves the component's own parameter names, including
+    abundance multipliers. ``abundance_values`` snapshots the baseline linear
+    number abundances relative to hydrogen for H through Zn. The table name
+    remains available as metadata. Compound-expression scale factors and
     absorption are not applied to the component normalization.
     """
 
@@ -28,10 +30,14 @@ class PlasmaState:
     parameters: Mapping[str, float]
     abundance_table: str | None = None
     xset: Mapping[str, str] | None = None
+    abundance_values: Mapping[str, float] | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "parameters", MappingProxyType(dict(self.parameters)))
         object.__setattr__(self, "xset", MappingProxyType(dict(self.xset or {})))
+        if self.abundance_values is not None:
+            object.__setattr__(self, "abundance_values",
+                               MappingProxyType(_abundance_values(self.abundance_values)))
 
     def _value(self, name, default=None):
         return next((v for k, v in self.parameters.items() if k.lower() == name), default)
@@ -100,10 +106,11 @@ def read_plasma_model(model=None, *, dataset_id=None, session=None):
     if not found:
         raise ValueError("source contains no supported built-in APEC components")
 
-    abundance_table, xset = None, {}
+    abundance_table, xset, abundance_values = None, {}, None
     if any(type(part).__module__.startswith("sherpa.astro.xspec") for part, _ in found):
         from sherpa.astro import xspec
         abundance_table, xset = xspec.get_xsabund(), xspec.get_xsxset()
+        abundance_values = _xspec_abundance_values()
 
     result = []
     for part, model_type in found:
@@ -112,8 +119,10 @@ def read_plasma_model(model=None, *, dataset_id=None, session=None):
             raise ValueError(f"nonfinite parameter in {part.name}")
         if not any(k.lower() == "kt" for k in parameters):
             raise ValueError(f"missing kT parameter in {part.name}")
-        state = PlasmaState(part.name, model_type, parameters, abundance_table, xset)
+        state = PlasmaState(part.name, model_type, parameters, abundance_table, xset,
+                            abundance_values)
         if state.kT <= 0 or state.redshift <= -1:
             raise ValueError(f"invalid temperature or redshift in {part.name}")
         result.append(state)
     return tuple(result)
+

@@ -136,6 +136,7 @@ class _FakeSession:
 class _FakeAtomDB:
     def __init__(self):
         self.session = _FakeSession()
+        self.abundset = None
 
     @property
     def temperature_range(self):
@@ -192,7 +193,8 @@ def test_model_construction_requires_sherpa():
 
 
 @pytest.mark.skipif(not HAS_CPP_COMPILER, reason="requires a C++ compiler")
-def test_default_model_constructor_registers_powerlaw_parameters(monkeypatch):
+@pytest.mark.parametrize("composition", [None, {"O": .25}])
+def test_default_model_constructor_registers_powerlaw_parameters(monkeypatch, composition):
     from sherpa_plasma import dem_model
 
     if dem_model._SHERPA_IMPORT_ERROR is None:
@@ -215,10 +217,19 @@ def test_default_model_constructor_registers_powerlaw_parameters(monkeypatch):
         dem_model.ArithmeticModel, "__init__", fake_model_init, raising=False
     )
 
-    model = AtomDBDEMModel("plaw", _FakeAtomDB())
+    database = _FakeAtomDB()
+    database.abundset = composition
+    model = AtomDBDEMModel("plaw", database)
+    database.abundset = {"O": 9.}
+    if composition is None:
+        assert model._abundset == "native"
+    else:
+        composition["O"] = 7.
+        assert model._abundset["O"] == .25
 
     assert [parameter.name for parameter in model.pars] == [
         "norm", "logTmin", "logTmax", "gamma"
     ]
     assert model.gamma.val == -2.0
     assert model.norm.val == 1e-3
+

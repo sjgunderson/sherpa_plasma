@@ -101,12 +101,42 @@ selected table directly; intermediate temperatures use PyAtomDB line-list
 interpolation. Duplicate line identities are rejected. Missing transitions
 have zero emissivity; a zero ratio denominator returns NaN.
 
-`abundances={'O': .5, 'Fe': 1.2}` supplies per-element multipliers relative
-to the active abundance table. `abundset` on an individual emissivity query
-can select a different local table; otherwise the connection's configured
-table is used (`abundset=None` retains the emissivity tables' native set).
-Alternate sets need the local ABUND file referenced by `filemap`. Each query
-resets element multipliers and the abundance table before applying its own.
+### Abundance compositions
+
+`abundset` selects the baseline composition for all CIE, NEI, shock, ratio,
+and DEM spectrum calculations. It accepts:
+
+| Form | Meaning |
+| --- | --- |
+| `"aspl"`, `"wilm"`, or any other XSPEC table name | Read the numerical composition through Sherpa/XSPEC. `"file"` reads the currently loaded custom composition. |
+| `"xspec:aspl"` | Require an XSPEC table lookup. |
+| `"atomdb:AG89"` | Select a table from the local AtomDB ABUND file. Unprefixed local names also work when XSPEC does not recognize them. |
+| `{"H": 1., "He": .085, "O": 4.9e-4}` | Linear number abundances relative to hydrogen; omitted elements are zero. Element keys may be symbols or atomic numbers. |
+| A 30-value sequence | Linear number abundances ordered H through Zn. A 31-value sequence with an unused leading slot is also accepted. |
+| A file path, including a `pathlib.Path` | A text file containing 30 linear values ordered H through Zn, as in an XSPEC custom abundance file. |
+| `"native"` | Use the emissivity files' native baseline. |
+
+`abundances={'O': .5, 'Fe': 1.2}` supplies separate per-element multipliers
+relative to that baseline. For example:
+
+```python
+rows = db.find_lines(21.5, 22.2, element='O', ion=7,
+                     kT=.2, abundset='aspl', abundances={'O': .5})
+```
+
+An individual query inherits `db.abundset` unless `abundset` is supplied;
+the connection default is the native composition. Each query resets element
+multipliers and the baseline before applying its own settings. Numerical
+compositions are applied without changing XSPEC's global abundance table.
+The target composition need not exist in AtomDB's local ABUND file. Conversion
+uses the emissivity files' native reference from the local ABUND file, or
+XSPEC's `angr` values for an AG89 reference if that file is unavailable.
+Offline use needs the native reference locally and either numerical values,
+a custom file, or a local table name; XSPEC table-name lookup requires Sherpa.
+
+When ranking lines from a model (`brightest=` without `kT`), the numerical
+composition is captured automatically from XSPEC along with the model's
+abundance parameters. See [CAPTURE_MODEL.md](CAPTURE_MODEL.md#abundances).
 
 ## Validation
 
@@ -121,3 +151,4 @@ a parameterized capture test exercises each supported class present in that
 build. The full Sherpa/XSPEC family matrix could not be run in environments
 without Sherpa/XSPEC. See [TESTING.md](TESTING.md) for commands and
 prerequisites.
+

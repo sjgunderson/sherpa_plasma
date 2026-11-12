@@ -41,8 +41,9 @@ absorption and continua, are ignored. An expression without a supported APEC
 component raises an error.
 
 The returned `PlasmaState` snapshots preserve all component parameters,
-resolve current linked values, and record XSPEC's abundance-table name and
-XSET settings. Reading does not evaluate a model, alter parameters, change
+resolve current linked values, and record XSPEC's abundance-table name,
+numerical baseline in `abundance_values`, and XSET settings. Reading does
+not evaluate a model, alter parameters, change
 session sources, or open database tables. Reread after fitting or changing
 parameters/settings. `state.velocity` is Gaussian sigma in km/s;
 `state.metal_abundance` exposes scalar `Abundanc`, while `state.abundances`
@@ -164,22 +165,32 @@ metadata; all results are emissivity contributions, **not absolute line
 fluxes**. No model normalization, expression scale factor, redshift,
 absorption, or broadening is applied.
 
-Abundance handling follows the ISIS/APED separation between a baseline
-abundance table and per-element multipliers. The captured XSPEC table is mapped
-to the corresponding local AtomDB table (`angr`→`AG89`, `aspl`→`Asplund09`,
-`feld`→`Feldman`, `aneb`→`AE82`, `grsa`→`GS98`, `wilm`→`Wilm00`,
-`lodd`→`Lodd03`). A scalar `Abundanc` parameter scales metals; explicit
-elemental parameters override their corresponding factors. A zero abundance
-excludes that element's lines from the discovered set (while another
-component with nonzero abundance can still contribute those same lines).
-Unsupported XSPEC abundance tables and mapped tables missing from the local
-ABUND file raise an error instead of silently using a different baseline.
-This table matching does not establish absolute-flux equivalence between
-XSPEC and AtomDB; check the normalization and other model conventions before
-making flux claims.
-The table mapping follows the [PyAtomDB XSPEC wrapper](https://github.com/AtomDB/pyatomdb/blob/master/pyatomdb/wrappers/kappa_xspec.py);
-the baseline-plus-element-multiplier design mirrors ISIS's
-[`set_abund`](https://github.com/houckj/isis/blob/master/share/emis-cmds.sl)
-and [`aped_set_abund`](https://github.com/houckj/isis/blob/master/contrib/aped_fit_models.sl)
-APED workflow. Additional XSPEC XSET abundance overrides are recorded in the
-capture but are not interpreted by this query.
+Each capture stores the current XSPEC numerical composition in the immutable
+`abundance_values` mapping: linear number abundances relative to hydrogen,
+from H through Zn. All built-in XSPEC tables, including `aspl`, `lpgp`,
+`lpgs`, and `felc`, and custom tables loaded with `set_xsabund` follow the
+same path. Queries convert these numbers relative to the emissivity files'
+native abundance reference; the selected target table need not be installed
+in AtomDB's local ABUND file. There is no table-name alias list.
+
+Model abundance parameters remain separate multipliers. A scalar `Abundanc`
+parameter scales metals; explicit elemental parameters override their
+corresponding factors. A zero baseline abundance or zero multiplier excludes
+that element's lines from discovery in that component. Another component
+with nonzero abundance can still contribute those same lines.
+
+Detached captures preserve their numerical composition after the active
+XSPEC table changes, including when a different custom vector is loaded under
+the same `file` name. They can be queried without Sherpa once captured, provided
+the local native reference and required AtomDB data are available. Older,
+manually constructed captures with only a built-in table name require XSPEC
+to resolve that table. An old custom `file` capture without numerical values
+must be recaptured or supplied with `abundance_values`; the current custom
+vector cannot identify the original composition.
+
+For direct queries and custom DEM models, see the shared
+[`abundset` options](PLASMA.md#abundance-compositions). Matching compositions
+does not establish absolute-flux equivalence between XSPEC and AtomDB; check
+normalization and other model conventions before making flux claims.
+Additional XSPEC XSET abundance overrides are recorded in the capture but
+are not interpreted by this query.

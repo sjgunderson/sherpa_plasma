@@ -128,7 +128,8 @@ class PlasmaTests(unittest.TestCase):
         (self.root / "VERSION").write_text("test-version")
         self.calls = []
         self.api = SimpleNamespace(
-            atomdb=SimpleNamespace(get_data=self.get_data, read_filemap=self.read_filemap),
+            atomdb=SimpleNamespace(get_data=self.get_data, read_filemap=self.read_filemap,
+                                   get_abundance=self.get_abundance),
             spectrum=SimpleNamespace(
                 CIESession=FakeSession,
                 NEISession=FakeNEISession,
@@ -137,6 +138,11 @@ class PlasmaTests(unittest.TestCase):
             atomic=SimpleNamespace(Z_to_mass=lambda *a, **k: np.arange(31) * 2.))
         self.stack.enter_context(patch.dict(sys.modules, {"pyatomdb": self.api}))
         self.db = self.stack.enter_context(AtomDB(self.root))
+
+    def get_abundance(self, *, abundset, datacache, settings):
+        self.assertEqual(abundset, "AG89")
+        self.assertIn("ABUND", datacache["data"]["misc"])
+        return {z: 1. for z in range(1, 31)}
 
     def read_filemap(self, filename, *, atomdbroot):
         self.assertEqual(filename, str(self.root / "filemap"))
@@ -422,6 +428,8 @@ class PlasmaTests(unittest.TestCase):
             xset={},
             temperatures=temperatures,
             weights=weights,
+            abundance_values={z: 2. if abundance_table == "wilm" else 1.
+                              for z in range(1, 31)},
         )
 
     def test_captured_nei_and_pshock_components_are_ranked(self):
@@ -619,25 +627,21 @@ class PlasmaTests(unittest.TestCase):
             21.5, 22.2, components=[component]
         )
         assert_allclose(result.total, [8.e-15, 4.e-15])
-        self.assertEqual(self.db._session.abundset, "Wilm00")
+        assert_allclose(self.db._session.abundsetvector[1:], 2.)
 
         line = LineID(8, 7, 7, 1)
         self.assertEqual(self.db.line_emissivity(line, 1.), 4.e-15)
         self.assertEqual(self.db._session.abundset, "AG89")
 
-    def test_captured_query_rejects_unknown_baseline_and_invalid_limits(self):
-        unknown = self.captured_component(
-            "hot", {"Abundanc": 1.}, [1.], [1.], abundance_table="lpgp"
-        )
-        with self.assertRaisesRegex(ValueError, "unsupported XSPEC abundance table"):
-            self.db.query_plasma_lines(21.5, 22.2, components=[unknown])
-        with self.assertRaisesRegex(ValueError, "absent from local ABUND"):
-            self.db.query_plasma_lines(
+    def test_captured_query_accepts_numeric_baselines_and_checks_limits(self):
+        for table in ("aspl", "lpgp", "lodd", "file", "another_table"):
+            result = self.db.query_plasma_lines(
                 21.5, 22.2, components=[self.captured_component(
                     "hot", {"Abundanc": 1.}, [1.], [1.],
-                    abundance_table="lodd",
+                    abundance_table=table,
                 )],
             )
+            assert_allclose(result.total, [4.e-15, 2.e-15])
         component = self.captured_component(
             "hot", {"Abundanc": 1.}, [1.], [1.]
         )
@@ -763,3 +767,4 @@ class PlasmaTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

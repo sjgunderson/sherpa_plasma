@@ -46,6 +46,19 @@ The reference tests can use either bundled 3.0.9 or 3.1.3 calibration.
 including file matching, derived cascade branching, and DEM integration.
 
 All tests, including the uploaded UV regressions, live under `tests/`.
+`tests/test_abundance_compositions.py` checks general XSPEC table names,
+custom mappings/vectors/files, separate fitted multipliers, and isolation
+across CIE, NEI, shock, ratios, model ranking, and cached DEM spectra using
+controlled data. It also checks immutable numerical composition snapshots and
+zero-abundance discovery. `tests/test_atomdb_real.py` includes an optional
+comparison of all built-in XSPEC tables and custom compositions against an
+independent PyAtomDB session. This requires local AtomDB data and Sherpa/XSPEC:
+
+```bash
+SHERPA_PLASMA_ATOMDB=/absolute/path/to/APED \
+python -m pytest tests/test_atomdb_real.py -q
+```
+
 `tests/test_uv_coverage.py` exercises independent sparse transitions across the
 full DEM, interpolation across missing endpoints, endpoint clamping, absolute
 weight preservation, and absent triplets without requiring Sherpa.

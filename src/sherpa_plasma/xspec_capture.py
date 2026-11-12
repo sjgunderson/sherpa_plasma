@@ -10,6 +10,7 @@ their explicit parameters rather than CIE temperature/weight arrays.
 from dataclasses import dataclass
 from threading import RLock
 from types import MappingProxyType
+from ._abundances import _abundance_values, _xspec_abundance_values
 
 import numpy as np
 
@@ -73,6 +74,9 @@ class CapturedPlasmaComponent:
 
     NEI and PShock components use their captured parameters directly, so their
     ``temperatures`` and ``weights`` are ``None``.
+    ``abundance_values`` stores an immutable numerical baseline (linear number
+    abundances relative to hydrogen), separate from fitted multipliers. Custom
+    compositions remain usable after XSPEC's current table changes.
     """
 
     name: str
@@ -82,6 +86,7 @@ class CapturedPlasmaComponent:
     xset: object
     temperatures: np.ndarray | None = None
     weights: np.ndarray | None = None
+    abundance_values: object = None
 
     def __post_init__(self):
         object.__setattr__(
@@ -90,6 +95,9 @@ class CapturedPlasmaComponent:
         object.__setattr__(
             self, "xset", MappingProxyType(dict(self.xset or {}))
         )
+        if self.abundance_values is not None:
+            object.__setattr__(self, "abundance_values",
+                               MappingProxyType(_abundance_values(self.abundance_values)))
 
         if (self.temperatures is None) != (self.weights is None):
             raise ValueError("captured temperatures and weights must both be set or both be None")
@@ -335,6 +343,7 @@ def capture_plasma_model(
     # model evaluations elsewhere while reading/restoring FunctionUtility state.
     with _CAPTURE_LOCK:
         abundance_table = xspec.get_xsabund()
+        abundance_values = _xspec_abundance_values()
         xset = xspec.get_xsxset()
 
         for component, model_type in components:
@@ -359,6 +368,7 @@ def capture_plasma_model(
                         parameters=parameters,
                         abundance_table=abundance_table,
                         xset=xset,
+                        abundance_values=abundance_values,
                     )
                 )
                 continue
@@ -377,7 +387,9 @@ def capture_plasma_model(
                     xset=xset,
                     temperatures=temperatures,
                     weights=weights,
+                    abundance_values=abundance_values,
                 )
             )
 
     return tuple(captured)
+

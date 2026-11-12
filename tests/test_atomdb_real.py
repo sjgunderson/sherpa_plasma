@@ -2,6 +2,8 @@
 import importlib.util
 import os
 import unittest
+import tempfile
+from pathlib import Path
 
 import numpy as np
 from numpy.testing import assert_allclose
@@ -89,5 +91,48 @@ class RealAtomDBValidation(unittest.TestCase):
         self.assertTrue(np.isnan(self.db.ratio_emissivity(lines[0], missing, .2)))
 
 
+    def test_general_abundances_against_independent_native_session(self):
+        try:
+            from sherpa.astro import xspec
+        except ImportError:
+            self.skipTest("requires Sherpa/XSPEC for named abundance values")
+        from sherpa_plasma.plasma import _SYMBOLS
+
+        temperature = float(self.db.temperatures[np.argmin(abs(self.db.temperatures - .2))])
+        with self.db._using() as api:
+            self.db._get_data(False, False, "ABUND", datacache=self.native.datacache)
+            reference = api.atomdb.get_abundance(
+                abundset=self.native.default_abundset, datacache=self.native.datacache,
+                settings={"filemap": str(self.db.filemap), "FileMap": str(self.db.filemap),
+                          "atomdbroot": str(self.db.root)})
+        cases = [(name, xspec.get_xsabundances(name)) for name in
+                 ("angr", "aspl", "aneb", "felc", "feld", "grsa", "lodd", "lpgp", "lpgs", "wilm")]
+        custom = xspec.get_xsabundances("angr")
+        custom["O"] *= .7
+        before = xspec.get_xsstate()
+        with tempfile.TemporaryDirectory() as directory:
+            filename = Path(directory) / "composition.dat"
+            np.savetxt(filename, [custom[symbol] for symbol in _SYMBOLS[1:]])
+            cases += [(custom, custom),
+                      ([custom[symbol] for symbol in _SYMBOLS[1:]], custom),
+                      (filename, custom)]
+            for spec, composition in cases:
+                with self.subTest(abundset=str(spec)):
+                    actual = self.db.find_lines(21.5, 22.2, kT=temperature,
+                                                element="O", ion=7, abundset=spec,
+                                                abundances={"O": .4})
+                    with self.db._using():
+                        self.native.set_abund(self.native.elements, 1.)
+                        self.native.set_abund(8, .4 * composition["O"] / reference[8])
+                        expected = self.native.return_linelist(
+                            temperature, [21.5, 22.2], specunit="A", teunit="keV",
+                            apply_aeff=False, nearest=True)
+                    expected = expected[(expected["Element"] == 8) & (expected["Ion"] == 7)]
+                    expected = expected[np.argsort(expected["Lambda"], kind="stable")]
+                    assert_allclose(actual["Epsilon"], expected["Epsilon"], rtol=1.e-12, atol=0.)
+            self.assertEqual(xspec.get_xsstate(), before)
+
+
 if __name__ == "__main__":
     unittest.main()
+

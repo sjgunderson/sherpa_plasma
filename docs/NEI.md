@@ -36,7 +36,10 @@ the PShock API integrates over its lower and upper age limits.
 
 
 Returned `Epsilon` values are photons $\mathrm{cm}^3$/s and include the selected
-abundance baseline and multipliers. Missing local NEI tables, unsupported
+abundance baseline and multipliers. All NEI and shock methods accept the shared
+[`abundset` options](PLASMA.md#abundance-compositions), including `abundset='aspl'`,
+custom numerical compositions, and custom files. `abundances` supplies separate
+element multipliers. Missing local NEI tables, unsupported
 initial populations, and invalid age bounds raise errors. Sherpa's bundled
 eigenvector table is preferred; if it is unavailable, the local ion-balance data
 is preloaded through the configured filemap. Missing entries are may be downloaded
@@ -62,3 +65,4 @@ and abundance tables are taken from the captured components. The established
 `ModelContribution`. Supplying `kT` retains the existing single-temperature
 search and ranks by `Epsilon` when `brightest` is used. Without either `kT` or
 `brightest`, `find_lines` remains an atomic-only LA search.
+
