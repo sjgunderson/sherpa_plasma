@@ -15,6 +15,20 @@ ROOT = os.environ.get("SHERPA_PLASMA_UV_XSPEC_ROOT")
 pytestmark = pytest.mark.skipif(not ROOT, reason="requires an explicit APEC root")
 
 
+def _abundance_setting(xspec, table, directory):
+    if table != "file":
+        return table
+    from sherpa_plasma.plasma import _SYMBOLS
+
+    values = xspec.get_xsabundances("angr")
+    values["He"] *= 1.3
+    values["Na"] *= 2.5
+    values["O"] *= .7
+    path = directory / "uv_abundances.dat"
+    path.write_text("\n".join(str(values[_SYMBOLS[z]]) for z in range(1, 31)) + "\n")
+    return str(path)
+
+
 @pytest.fixture(scope="module")
 def isolated_sodium():
     script = Path(__file__).parents[1] / "examples" / "validate_uv_xspec.py"
@@ -943,13 +957,16 @@ def test_pumped_sodium_conserves_isolated_photons(isolated_sodium):
 @pytest.mark.parametrize("table,redshift,abundance,norm,temperature,grid", [
     ("aspl", .1, .4, .02, .44, "linear"),
     ("wilm", .05, 1.7, .3, .46, "quadratic"),
+    *[(name, .02, .6, .3, .44, "linear") for name in
+      ("angr", "aneb", "felc", "feld", "grsa", "lodd", "lpgp", "lpgs", "file")],
 ])
 def test_pumped_sodium_with_abundances_and_redshift(
-        table, redshift, abundance, norm, temperature, grid):
+        table, redshift, abundance, norm, temperature, grid, tmp_path):
     from sherpa.astro import xspec
     from sherpa_plasma._uv_model import _TripletPumpingModel
 
     xspec.set_xsxset("APECROOT", ROOT)
+    table = _abundance_setting(xspec, table, tmp_path)
     xspec.set_xsabund(table)
     try:
         child = xspec.XSvvapec("scaled_sodium")
@@ -978,16 +995,102 @@ def test_pumped_sodium_with_abundances_and_redshift(
         f, i1, i2 = [line["isolated_flux"] for line in lines]
         record = wrapper._entries[0][0]
         calibration = record["calibration"]
-        r0 = f / (i1 + i2)
-        ratio = r0 / 2
-        delta = f - (f + i1 + i2) * ratio / (1 + ratio)
         expected = np.zeros(2000)
-        for line, factor in zip(lines, (-1, *calibration["redistribution"])):
-            expected[line["observed_bin"]] += factor * delta
+        if f + i1 + i2 == 0:
+            assert xspec.get_xsabundances()["Na"] == 0.
+        else:
+            r0 = f / (i1 + i2)
+            ratio = r0 / 2
+            delta = f - (f + i1 + i2) * ratio / (1 + ratio)
+            for line, factor in zip(lines, (-1, *calibration["redistribution"])):
+                expected[line["observed_bin"]] += factor * delta
         base = child(edges[:-1], edges[1:])
         wrapper.p_Na = 1.
         actual = wrapper(edges[:-1], edges[1:]) - base
         np.testing.assert_allclose(actual, expected, rtol=2.e-8, atol=1.e-18)
+        if f + i1 + i2 == 0:
+            diagnostic, = wrapper.diagnostics()
+            assert diagnostic["ratio_status"] == "no_triplet_emission"
+    finally:
+        xspec.set_xsabund("angr")
+
+
+@pytest.mark.parametrize("kind", ["wdem", "bvwdem", "mkcflow"])
+@pytest.mark.parametrize("table", ["lodd", "file"])
+def test_dem_abundance_tables_against_isolated_line_profiles(kind, table, tmp_path):
+    _require_dem_reference()
+    from sherpa.astro import xspec
+    from sherpa_plasma import wrap_triplet_pumping
+
+    setting = _abundance_setting(xspec, table, tmp_path)
+    parameters = {"Redshift": .02, "norm": .3}
+    if kind == "mkcflow":
+        parameters.update(lowT=.25, highT=.8, Abundanc=.6)
+    else:
+        parameters.update(Tmax=.8, beta=.5)
+        if kind == "bvwdem":
+            parameters.update(Na=.6, Velocity=750.)
+        else:
+            parameters.update(abundanc=.6)
+    script = Path(__file__).parents[1] / "examples" / "characterize_uv_dem.py"
+    command = [sys.executable, str(script), "--root", ROOT, "--model", kind,
+               "--parameters", json.dumps(parameters), "--abundance-table", setting,
+               "--include-profile"]
+    if kind == "mkcflow":
+        command.append("--fixed-cooling-weights")
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
+    assert len(lines) == 3 and all(row["weights_unchanged"] for row in lines)
+    f, i1, i2 = [row["isolated_flux"] for row in lines]
+    assert min(f, i1, i2) > 0
+    transfer = f * (i1 + i2) / (f + 2 * (i1 + i2))
+    xspec.set_xsxset("APECROOT", ROOT)
+    xspec.set_xsabund(setting)
+    try:
+        child = getattr(xspec, "XS" + kind)("table_" + kind)
+        for name, value in parameters.items():
+            getattr(child, name).val = value
+        wrapper = wrap_triplet_pumping(child, "Na")
+        edges = np.linspace(1., 1.2, 2001)
+        base = child(edges[:-1], edges[1:])
+        np.testing.assert_array_equal(wrapper(edges[:-1], edges[1:]), base)
+        wrapper.p_Na = 1.
+        actual = wrapper(edges[:-1], edges[1:]) - base
+        eta1, eta2 = wrapper._entries[0][0]["calibration"]["redistribution"]
+        profiles = [np.asarray(row["isolated_profile"]) for row in lines]
+        expected = transfer * (-profiles[0] / f + eta1 * profiles[1] / i1
+                               + eta2 * profiles[2] / i2)
+        np.testing.assert_allclose(actual, expected, rtol=2.e-7, atol=1.e-17)
+        assert actual.sum() == pytest.approx(0., abs=1.e-17)
+        diagnostic, = wrapper.diagnostics()
+        assert diagnostic["R_integrated"] == pytest.approx(f / (i1 + i2) / 2, rel=2.e-8)
+    finally:
+        xspec.set_xsabund("angr")
+
+
+def test_zero_custom_abundance_and_same_name_vector_reload():
+    from sherpa.astro import xspec
+    from sherpa_plasma import wrap_triplet_pumping
+
+    values = xspec.get_xsabundances("angr")
+    values["Na"] = 0.
+    xspec.set_xsxset("APECROOT", ROOT)
+    xspec.set_xsabundances(values)
+    try:
+        child = xspec.XSvvapec("no_sodium")
+        child.kT = .43
+        wrapper = wrap_triplet_pumping(child, "Na")
+        wrapper.p_Na = 1.
+        edges = np.linspace(1., 1.2, 2001)
+        np.testing.assert_array_equal(wrapper(edges[:-1], edges[1:]), child(edges[:-1], edges[1:]))
+        diagnostic, = wrapper.diagnostics()
+        assert diagnostic["ratio_status"] == "no_triplet_emission"
+        values["He"] *= 1.3  # Na stays zero but the composition still changed.
+        xspec.set_xsabundances(values)
+        assert xspec.get_xsabund() == "file"
+        with pytest.raises(RuntimeError, match="settings or abundances changed"):
+            wrapper(edges[:-1], edges[1:])
     finally:
         xspec.set_xsabund("angr")
 

@@ -28,9 +28,13 @@ struct Aped {
     RealArray m_Temperatures = RealArray({.1, 1., 10.});
     std::vector<ApedTemperatureRecord> m_TemperatureRecord;
     std::string mode;
+    double solar_scale = 1.;
 
     int Read(std::string, std::string lines) {
         mode = lines;
+        if (mode.find("solar_zero") != std::string::npos) solar_scale = 0.;
+        if (mode.find("solar_low") != std::string::npos) solar_scale = .25;
+        if (mode.find("solar_high") != std::string::npos) solar_scale = 2.5;
         m_TemperatureRecord.resize(3);
         return 0;
     }
@@ -81,7 +85,9 @@ struct Aped {
             }
             for (int side = 0; side < 2; ++side) {
                 size_t t = side ? high : low;
-                double coefficient = weights[i] * (side ? a : 1 - a);
+                // Model the solar conversion that real Aped::SumEqSpectra does
+                // internally; the Python wrapper must not apply it again.
+                double coefficient = solar_scale * weights[i] * (side ? a : 1 - a);
                 for (const auto& element : m_TemperatureRecord[t].m_ElementRecord)
                     for (const auto& ion : element.m_IonRecord)
                         for (size_t j = 0; j < ion.m_LineEnergy.size(); ++j) {

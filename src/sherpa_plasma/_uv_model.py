@@ -45,9 +45,38 @@ def _file_sha256(path, _identity):
 
 def _state():
     settings = xspec.get_xsxset()
-    return (xspec.get_xsversion(), xspec.get_xsabund(),
+    table = xspec.get_xsabund()
+    # XSPEC calls every custom vector "file". A reload can change any element
+    # without changing that name, including elements affecting cooling weights.
+    # Named tables are immutable in XSPEC; keep their fitting path inexpensive.
+    custom = None
+    if table == "file":
+        custom = tuple(sorted((symbol, float(value))
+                              for symbol, value in xspec.get_xsabundances().items()))
+        if any(not np.isfinite(value) or value < 0 for _, value in custom):
+            raise ValueError("XSPEC abundance values must be finite and nonnegative")
+    return (xspec.get_xsversion(), table, custom,
             tuple(sorted((key, value) for key, value in settings.items()
                          if key.startswith("APEC") or key in _RELEVANT_XSETS)))
+
+
+def _abundance_scales(elements):
+    """Convert reference APEC emissivities to the active XSPEC composition."""
+    reference = xspec.get_xsabundances("angr")
+    actual = xspec.get_xsabundances()
+    scales = {}
+    for z in elements:
+        symbol = _SYMBOLS[z]
+        value, baseline = float(actual[symbol]), float(reference[symbol])
+        if not np.isfinite(value) or value < 0:
+            raise ValueError(f"{symbol} XSPEC abundance must be finite and nonnegative")
+        if not np.isfinite(baseline) or baseline <= 0:
+            raise ValueError(f"{symbol} has no positive reference XSPEC abundance")
+        scale = value / baseline
+        if not np.isfinite(scale):
+            raise ValueError(f"{symbol} XSPEC abundance scaling is not finite")
+        scales[z] = scale
+    return scales
 
 
 def _file_identity(path):
@@ -235,10 +264,6 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
             provider = atomdb if isinstance(atomdb, AtomDBTripletProvider) else AtomDBTripletProvider(atomdb)
             manifest, atomic_files, atomic_identities = _installed_manifest(
                 provider, selected, line_file, (file_hash, continuum_hash))
-        if xspec.get_xsabund() not in ("angr", "aspl", "wilm"):
-            raise ValueError("supported XSPEC abundance tables are angr, aspl and wilm")
-        if is_dem and xspec.get_xsabund() != "angr":
-            raise ValueError("experimental DEM triplet pumping requires angr abundances")
         if is_dem:
             try:
                 from sherpa.astro.xspec import _xspec
@@ -268,8 +293,7 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
         self._entries = []
         self._abundance_sources = []
         child_parameter_names = {par.name.lower() for par in child.pars}
-        reference = xspec.get_xsabundances("angr")
-        actual = xspec.get_xsabundances()
+        abundance_scales = _abundance_scales(selected)
         for z in selected:
             record = manifest["ions"].get(str(z))
             if record is None:
@@ -280,7 +304,7 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
                           for index in upper)
             grid = _load_grid(str(line_file), lines, file_hash,
                               tuple(record.get("line_wavelengths_A", ())))
-            self._entries.append((record, grid, actual[_SYMBOLS[z]] / reference[_SYMBOLS[z]]))
+            self._entries.append((record, grid, abundance_scales[z]))
             symbol = _SYMBOLS[z]
             if is_wdem and kind not in (getattr(xspec, "XSwdem", None),
                                         getattr(xspec, "XSbwdem", None)):
@@ -312,6 +336,9 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
         self._child_temperatures = None
         self._child_weights = None
         self._profile_cache = {}
+        # Sherpa's child cache is keyed by parameters and energy bins, not the
+        # XSPEC abundance table. A reconstructed wrapper needs a fresh spectrum.
+        child.cache_clear()
         CompositeModel.__init__(self, name, (child, self._pumping))
 
     def cache_clear(self):
@@ -371,10 +398,10 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
             return self._dem_diagnostics()
         temperature = float(self._child.pars[self._indices["kt"]].val)
         results = []
-        for z, parameter, (record, grid, _) in zip(
+        for z, parameter, (record, grid, abundance_scale) in zip(
                 self._selected, self._pumping.pars, self._entries):
             emissivities, _ = _integrate_triplet(grid, [temperature], [1.])
-            f, i1, i2 = emissivities
+            f, i1, i2 = emissivities * abundance_scale
             r0, ratio, status = _ratio_diagnostic(f, i1 + i2, float(parameter.val))
             c = record["calibration"]
             results.append({
@@ -385,6 +412,7 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
                 "R": ratio,
                 "ratio_status": status,
                 "intrinsic_triplet_fluxes": (float(f), float(i1), float(i2)),
+                "abundance_scale_from_angr": float(abundance_scale),
                 "atomdb_version": self._manifest["version"],
                 "line_file_sha256": self._manifest["line_file_sha256"],
                 "continuum_file_sha256": self._manifest["continuum_file_sha256"],
@@ -414,10 +442,11 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
         )
         temperatures, weights = _validated_dem_weights(temperatures, weights)
         results = []
-        for z, parameter, (record, grid, _) in zip(
+        for z, parameter, (record, grid, abundance_scale) in zip(
                 self._selected, self._pumping.pars, self._entries):
             active = weights > 0
-            (f, i1, i2), _ = _integrate_triplet(grid, temperatures, weights)
+            emissivities, _ = _integrate_triplet(grid, temperatures, weights)
+            f, i1, i2 = emissivities * abundance_scale
             r0, ratio, status = _ratio_diagnostic(f, i1 + i2, float(parameter.val))
             results.append({
                 "element": _SYMBOLS[z],
@@ -427,6 +456,7 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
                 "R_integrated": ratio,
                 "ratio_status": status,
                 "intrinsic_triplet_fluxes": (float(f), float(i1), float(i2)),
+                "abundance_scale_from_angr": float(abundance_scale),
                 "temperature_range_keV": (float(temperatures[active].min()),
                                           float(temperatures[active].max())),
                 "coverage_keV": _temperature_interval(grid),
@@ -513,7 +543,7 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
             if abundance < 0:
                 raise ValueError("element abundance must be nonnegative")
             active = weights > 0
-            if abundance == 0 or norm == 0:
+            if abundance_scale == 0 or abundance == 0 or norm == 0:
                 continue
             calibration = record["calibration"]
             eta1, eta2 = calibration["redistribution"]
@@ -568,7 +598,9 @@ class _TripletPumpingModel(CompositeModel, ArithmeticModel):
                                 self._profile_cache[(z, "donor")] = donor
                         additions.append(donor[index] / f)
                 with np.errstate(over="raise", invalid="raise", divide="raise"):
-                    output += abundance_scale * abundance * norm * transfer * (
+                    # Aped::SumEqSpectra already converts these native profiles
+                    # from the reference abundances to the active XSPEC table.
+                    output += abundance * norm * transfer * (
                         -projected[0] / f + eta1 * additions[0] + eta2 * additions[1])
                 continue
             bins = _unbroadened_line_bins(lo, hi, wavelengths, redshift)
@@ -591,6 +623,9 @@ def wrap_triplet_pumping(child, elements, *, name=None, atomdb=None,
     Missing native line entries contribute zero. Temperatures beyond the native
     table use its nearest endpoint, matching XSPEC. ``coverage_tolerance`` is
     accepted for compatibility and has no effect; no DEM bins are discarded.
+
+    Any active XSPEC abundance table or custom vector is supported. Choose it
+    before constructing the wrapper; changing it requires a new wrapper.
     """
     return _TripletPumpingModel(
         child, elements, name=name, atomdb=atomdb,

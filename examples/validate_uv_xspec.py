@@ -100,8 +100,9 @@ def _run(args):
     if native_abundance != "AG89":
         raise ValueError(f"unverified APEC abundance source: {native_abundance!r}")
     symbol = _SYMBOLS[args.element]
+    xspec.set_xsabund(args.abundance_table)
     reference_solar = xspec.get_xsabundances("angr")[symbol]
-    selected_solar = xspec.get_xsabundances(args.abundance_table)[symbol]
+    selected_solar = xspec.get_xsabundances()[symbol]
     lines = tuple(LineID(args.element, args.element - 1, upper, 1)
                   for upper in args.upper)
     data = _read_native_lines(line_file, lines)
@@ -252,3 +253,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

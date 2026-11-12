@@ -16,8 +16,9 @@ the active AtomDB line and continuum files. Bundled calibrations are selected
 by the SHA256 hashes of the AtomDB 3.0.9 and 3.1.3 reference files. For other
 installations, the wrapper derives the triplet calibration from a matching
 local AtomDB filemap and its LV/LA atomic files; see the example below. The
-supported solar abundance tables are `angr`, `aspl`, and `wilm`. Apart from the trace-abundance
-settings described below, other APEC XSET options, including broadening and
+wrapper accepts any abundance table selected in XSPEC, including built-in
+tables and custom files or vectors. Apart from the trace-abundance settings
+described below, other APEC XSET options, including broadening and
 alternate interpolation settings, and the `LINECRITLEVEL` XSET are rejected.
 Install the package into the same environment as Sherpa:
 
@@ -69,6 +70,36 @@ wrapper returns the unmodified child spectrum. Choose other ions by symbol or
 atomic number, for example `wrap_triplet_pumping(plasma, ["O", "Ne", "Na"])`.
 Each selected ion has its own `p_<symbol>` parameter.
 
+### Abundance tables
+
+Select the composition before constructing the wrapper. For example,
+`xspec.set_xsabund("lodd")` selects a built-in table, while
+`xspec.set_xsabund("/absolute/path/to/abundances.dat")` loads a custom file.
+Custom vectors can also be supplied directly:
+
+```python
+composition = xspec.get_xsabundances("angr")
+composition["Si"] *= 2.0
+xspec.set_xsabundances(composition)
+pumped = wrap_triplet_pumping(plasma, ["Si"])
+```
+
+The unbroadened correction converts reference APEC emissivities by the selected
+element's active abundance divided by its `angr` abundance. Native broadened
+profiles already include that conversion inside XSPEC, so it is applied once.
+The component's fitted element abundance and normalization are then applied
+with the existing scalar, variable-element, and trace-element conventions.
+Values must be finite and nonnegative. A zero table abundance produces no
+correction for that element, and diagnostics report no triplet emission.
+
+If the table changes, reconstruct the wrapper. Custom-file/vector changes are
+detected from their numerical values even when XSPEC continues to call the
+table `file`. Reconstructing also clears the child's cached spectrum so the
+new composition is evaluated. Named-table checks use the table name; they do
+not read the full abundance vector on every evaluation. Cooling-flow weights
+are captured from the model under the selected composition, rather than
+rescaling weights from a different table.
+
 The supported ions for the bundled reference datasets are C V, N VI, O VII,
 Ne IX, Na X, Mg XI, Al XII, Si XIII, P XIV, S XV, Cl XVI, Ar XVII, K XVIII,
 Ca XIX, Ti XXI, Cr XXIII, Mn XXIV, Fe XXV, and Ni XXVII. Other ions are
@@ -80,7 +111,7 @@ determined from the selected ion's LV/LA data and transition identities. Broaden
 `wrap_triplet_pumping` also accepts `XSwdem`, `XSvwdem`, `XSvvwdem`,
 `XSbwdem`, `XSbvwdem`, and `XSbvvwdem` components under a
 strict experimental configuration: available ions from the active AtomDB
-installation, `angr` abundances, `switch=2`, `nH=1`, and no APEC
+installation, any active XSPEC abundance table, `switch=2`, `nH=1`, and no APEC
 XSETs other than `APECROOT`. The optional XSPEC bridge must be built as
 described in [TESTING.md](TESTING.md). The component's scalar metal abundance
 also scales sodium, unlike the default trace-element treatment in `XSapec`.
@@ -147,15 +178,17 @@ XSPEC boundary-search error.
 Broadened comparisons cover all three variants for sodium at zero and
 nonzero velocities, including truncated energy grids, plus selected oxygen,
 phosphorus, and iron cases.
-This does not establish accuracy for every installation, other abundance
-tables, DEM families, or broadened APEC variants. XSPEC global
+These historical comparisons do not establish accuracy for every installation,
+abundance table, DEM family, or broadened APEC variant. The expanded abundance
+regressions described in [TESTING.md](TESTING.md) require a native XSPEC run.
+XSPEC global
 metadata is shared: avoid concurrent XSPEC evaluations while the bridge
 captures temperature weights.
 
 ### Experimental XSmkcflow support
 
 The wrapper also accepts unbroadened `XSmkcflow` for the available ions, with
-the active AtomDB files, `angr`, `switch=2`, positive
+the active AtomDB files, any active XSPEC abundance table, `switch=2`, positive
 redshift, and no APEC XSETs other than `APECROOT`. It requires the optional
 XSPEC bridge and the same full-DEM integration and concurrency precautions
 as `XSwdem`. The wrapper detects XSPEC cosmology changes and must be
@@ -187,7 +220,9 @@ reports the native database intervals, `policy="full_dem"`, and
 not restrictions on the component's temperatures. The wrapper leaves the child's
 temperature bounds unchanged. DEM diagnostics include all positive-weight
 bins in their temperature range and count, and report the three integrated
-intrinsic photon emissivities in `intrinsic_triplet_fluxes`.
+intrinsic photon emissivities in `intrinsic_triplet_fluxes`. These emissivities
+include the active table's solar abundance scale, before the fitted element
+abundance and normalization. `abundance_scale_from_angr` reports that scale.
 
 Use one wrapper per plasma component in a sum. If physically justified,
 parameters can be linked with Sherpa parameter expressions. Equal `p` values
@@ -246,8 +281,8 @@ astrophysical uncertainties.
   the Python/XSPEC process and reconstruct the wrapper. The wrapper detects
   changes after construction, but cannot determine whether XSPEC had already
   cached older contents before it was constructed.
-- Changes to the relevant XSPEC global settings or solar abundance table
-  require reconstructing the wrapper.
+- Changes to the relevant XSPEC global settings, abundance table, or numerical
+  custom abundance vector require reconstructing the wrapper.
 - Packaged calibrations apply only to their exact file hashes. Other file
   pairs require the matching installation's filemap and atomic files; data
   that fail the atomic-identity or branching checks are rejected.

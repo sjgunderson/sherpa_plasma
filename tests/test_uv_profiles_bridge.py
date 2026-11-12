@@ -12,6 +12,8 @@ import sysconfig
 
 import numpy as np
 import pytest
+import sherpa_plasma
+from test_uv_model_coverage import uv_module, make_wrapper, evaluate
 
 
 @pytest.fixture(scope="module")
@@ -78,6 +80,33 @@ def test_transition_identity_survives_native_energy_sorting(bridge):
         profiles, [1., 1.2, 1.5, 1.8], [.1, 1., 10.], [1., 1., 1.], 0., 0.))
     expected = np.array([[7., 0., 0.], [0., 0., 2.], [0., 1., 0.]]) * 1.e14
     np.testing.assert_allclose(actual, expected, rtol=1.e-14)
+
+
+@pytest.mark.parametrize("mode,scale", [("solar_zero", 0.), ("solar_low", .25),
+                                        ("solar_high", 2.5)])
+@pytest.mark.parametrize("missing_branch", [False, True])
+def test_wrapper_applies_native_solar_conversion_once(
+        bridge, uv_module, monkeypatch, mode, scale, missing_branch):
+    wrapper = make_wrapper(uv_module, dem=True, broadened=True)
+    record, grid, _ = wrapper._entries[0]
+    wrapper._entries[0] = record, grid, scale
+    if missing_branch:
+        grid.emissivities[:, 2] = 0.
+        mode += "_absent_i2"
+    context = create(bridge, mode)
+    monkeypatch.setattr(uv_module, "_capture_cie_evaluation", lambda *args: (
+        np.full(3, 10.), np.array([1.]), np.ones(1)))
+    monkeypatch.setattr(uv_module, "_load_broad_profiles", lambda *args: context)
+    monkeypatch.setattr(uv_module, "_root", lambda: Path("controlled"))
+    monkeypatch.setattr(sherpa_plasma, "_xspec_profiles", bridge, raising=False)
+    transfer = 1. if missing_branch else 1.2
+    np.testing.assert_allclose(evaluate(wrapper),
+                               10. + scale * transfer * np.array([-1., .75, .25]))
+    # Pumping-only changes continue to use the native profiles already cached.
+    def unexpected(*args):
+        raise AssertionError("unexpected projection for unchanged child")
+    monkeypatch.setattr(uv_module, "_load_broad_profiles", unexpected)
+    assert np.isfinite(evaluate(wrapper, pumping=2.)).all()
 
 
 @pytest.mark.parametrize("temperatures,weights", [([0.], [1.]), ([1.], [-1.])])

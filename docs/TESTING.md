@@ -56,6 +56,14 @@ branch with controlled doubles. These are not native XSPEC validation.
 a small controlled Aped interface to check sparse-record handling, both tails,
 endpoint clamping, and donor profiles. This also does not validate XSPEC's
 actual ABI or broadened line physics.
+`tests/test_uv_abundances.py` checks named and custom table acceptance for all
+supported wrapper families, zero abundances, numerical custom-vector changes,
+and rebuilding with a cached child. Compiled bridge tests check that native
+solar scaling is applied once, including the donor profile for an empty branch.
+These use controlled interfaces and do not establish real XSPEC compatibility.
+The real abundance regressions cover the built-in tables and a custom file for
+single-temperature APEC, isolated line profiles for `wdem`, `bvwdem`, and
+`mkcflow` under `lodd` and a custom table, and custom-vector reload detection.
 The real-model tests exercise `Tmax=1`, `beta=.1`, `p_Si=1` for all six wDEM
 variants, formerly rejected sodium configurations, and broad native-grid line
 projections. Rebuild both optional bridges before running in CIAO:
