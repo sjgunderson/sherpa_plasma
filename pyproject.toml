@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sherpa_plasma"
 version = "0.1.0"
-description = "Independent local AtomDB access and plasma-model inspection tools"
+description = "Local AtomDB access, plasma inspection, and native Sherpa CIE models"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}
@@ -23,7 +23,7 @@ where = ["src"]
 include = ["sherpa_plasma*"]
 
 [tool.setuptools.package-data]
-sherpa_plasma = ["*.cpp"]
+sherpa_plasma = ["*.cpp", "*.h", "_uv_atomdb_*.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

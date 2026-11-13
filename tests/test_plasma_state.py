@@ -74,6 +74,7 @@ class PlasmaStateTests(unittest.TestCase):
         type(model).__module__ = "sherpa.astro.xspec"
         settings = {"APECROOT": "/local/apec", "APEC_TRACE_ABUND": "1.0"}
         xspec = SimpleNamespace(get_xsabund=Mock(return_value="angr"),
+                                get_xsabundances=Mock(return_value={"O": .001}),
                                 get_xsxset=Mock(return_value=settings))
         with patch.dict(sys.modules, {"sherpa.astro": SimpleNamespace(xspec=xspec)}):
             state, = read_plasma_model(model)
@@ -132,3 +133,4 @@ class RealXSPECStateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

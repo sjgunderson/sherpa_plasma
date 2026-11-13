@@ -1,0 +1,10 @@
+numpy>=1.23
+
+[plasma]
+pyatomdb<2,>=1.0.0
+astropy>=5
+
+[test]
+pytest>=7
+pyatomdb<2,>=1.0.0
+astropy>=5
